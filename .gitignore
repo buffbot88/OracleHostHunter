@@ -1,0 +1,20 @@
+# Local OCI credentials and account exports — contains OCIDs and private keys
+AccountInfo/*
+!AccountInfo/information.example.md
+
+# Local OCI/OracleHost configuration
+.oci/
+config.json
+
+# Generated SSH keys used by OracleHost
+*.pub
+.oraclehost_id_rsa
+.oraclehost_id_rsa.pub
+
+# Freebuff workspace (tool state, incl. desktop-v2.db)
+.freebuff/
+
+# .NET build output
+bin/
+obj/
+.validation-build*/
