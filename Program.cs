@@ -1,7 +1,8 @@
-using OracleHost.Forms;
+using OracleHost.Windows;
 using OracleHost.Helpers;
 using OracleHost.Models;
 using OracleHost.Services;
+using System.IO;
 
 namespace OracleHost;
 
@@ -10,21 +11,29 @@ internal static class Program
     [STAThread]
     static void Main()
     {
-        ApplicationConfiguration.Initialize();
+        var app = new App();
+        app.InitializeComponent();
         DiagnosticLog.StartSession();
-        RegisterGlobalExceptionHandlers();
+        RegisterGlobalExceptionHandlers(app);
 
         try
         {
             DiagnosticLog.Info("Startup", "Loading OracleHost configuration.");
             var config = ConfigService.Load();
-            DiagnosticLog.Info("Startup", $"Configuration loaded. Has API credentials: {config.HasCredentials}; has session path: {!string.IsNullOrWhiteSpace(config.SessionConfigPath)}.");
+            DiagnosticLog.Info("Startup", $"Configuration loaded. Has API credentials: {config.HasCredentials}.");
 
             ApplyStartupMigrations(config);
-            ClearStaleSessionPath(config);
 
             if (!TryAdoptAccountInfoCredentials(ref config, out var adoptedAccountInfo))
                 return; // an explicit AccountInfo bundle exists but is unusable
+
+            if (!config.HasCredentials)
+            {
+                DiagnosticLog.Warn("Startup", "No usable credentials after AccountInfo discovery; showing the AccountInfo report.");
+                new AccountInfoReportWindow(
+                    AccountInfoReport.Inspect(FindAccountInfoDirectory())).ShowDialog();
+                return;
+            }
 
             // The OCI API key is separate from the SSH key used inside the VM.
             // Create a local SSH pair only when the user does not already have one;
@@ -32,44 +41,71 @@ internal static class Program
             EnsureSshPublicKey(config);
             if (adoptedAccountInfo)
             {
-                ConfigService.Save(config);
-                DiagnosticLog.Info("Startup", "Discovered AccountInfo configuration saved for the next launch.");
+                // Persist the adopted configuration only when the AccountInfo
+                // bundle actually changed since the last successful run; an
+                // unchanged bundle means config.json is already current.
+                var previousFingerprint = LoadSavedAccountInfoFingerprint();
+                var currentFingerprint = config.AccountInfoFingerprint;
+                if (!string.Equals(previousFingerprint, currentFingerprint, StringComparison.OrdinalIgnoreCase))
+                {
+                    ConfigService.Save(config);
+                    DiagnosticLog.Info("Startup", previousFingerprint == null
+                        ? "Discovered AccountInfo configuration saved for the next launch."
+                        : "AccountInfo bundle changed; saved the updated configuration.");
+                }
+                else
+                {
+                    DiagnosticLog.Info("Startup", "AccountInfo bundle unchanged since the last run; config.json was not rewritten.");
+                }
             }
 
-            if (!RunAuthenticationFlow(ref config, out var browserLoginCompleted))
-                return; // login was cancelled
-
-            if (!RunSetupWizardIfIncomplete(ref config))
+            var accountInfoComplete = adoptedAccountInfo &&
+                !string.IsNullOrWhiteSpace(config.CompartmentOcid) &&
+                !string.IsNullOrWhiteSpace(config.SubnetOcid);
+            if (!accountInfoComplete && !RunSetupWizardIfIncomplete(ref config))
                 return; // wizard was cancelled
 
-            if (!ValidateConfigWithWizardRetries(ref config))
-                return; // wizard was cancelled during validation retries
+            if (!ValidateConfig(accountInfoComplete, config))
+                return; // configuration problems are reported by the validator
 
             DiagnosticLog.Info("Startup", $"Selected OCI credentials: user={DiagnosticLog.RedactIdentifier(config.UserOcid)}, tenancy={DiagnosticLog.RedactIdentifier(config.TenancyOcid)}, fingerprint={config.Fingerprint}, key file={DiagnosticLog.SafeFileName(config.KeyFilePath)}.");
             DiagnosticLog.Info("Startup", "Launching main dashboard and scheduling an authentication preflight.");
-            // Run one preflight for every authenticated startup, not only browser
-            // logins, so API-key failures are visible immediately.
-            using var mainForm = new MainForm(config, browserLoginCompleted || config.HasCredentials || config.HasSession);
-            Application.Run(mainForm);
+            // Application.Run starts the WPF dispatcher loop and keeps the
+            // process alive. Showing a window without it returns from Main and
+            // the app exits immediately.
+            var mainWindow = new MainWindow(config, runStartupPreflight: true);
+            app.Run(mainWindow);
         }
         catch (Exception ex)
         {
             DiagnosticLog.Exception("Startup", "Startup sequence", ex);
-            MessageBox.Show(
+            System.Windows.MessageBox.Show(
                 $"OracleHost could not start.\n\n{DiagnosticLog.Redact(ex.Message)}\n\nDetailed diagnostics were saved to:\n{DiagnosticLog.LogPath}",
-                "OracleHost Startup Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                "OracleHost Startup Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
         }
     }
 
-    private static void RegisterGlobalExceptionHandlers()
+    private static void RegisterGlobalExceptionHandlers(System.Windows.Application app)
     {
-        Application.ThreadException += (_, args) =>
+        // WPF surfaces UI-thread faults through DispatcherUnhandledException,
+        // not the WinForms ThreadException event.
+        app.DispatcherUnhandledException += (_, args) =>
         {
             DiagnosticLog.Exception("UI", "Unhandled UI exception", args.Exception);
-            MessageBox.Show(
+            System.Windows.MessageBox.Show(
                 $"OracleHost encountered an unexpected error.\n\n{args.Exception.Message}\n\n" +
                 $"Detailed diagnostics were saved to:\n{DiagnosticLog.LogPath}",
-                "OracleHost Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                "OracleHost Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+            args.Handled = true;
+        };
+
+        System.Windows.Forms.Application.ThreadException += (_, args) =>
+        {
+            DiagnosticLog.Exception("UI", "Unhandled WinForms interop exception", args.Exception);
+            System.Windows.MessageBox.Show(
+                $"OracleHost encountered an unexpected error.\n\n{args.Exception.Message}\n\n" +
+                $"Detailed diagnostics were saved to:\n{DiagnosticLog.LogPath}",
+                "OracleHost Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
         };
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
@@ -81,23 +117,39 @@ internal static class Program
     }
 
     /// <summary>
-    /// Migrates older saved hunter sizing and retry intervals to the current safe
-    /// defaults, persisting the result when possible. Only these resource fields
-    /// are changed; credentials, OCIDs, and security options are preserved.
+    /// Reads the AccountInfo fingerprint recorded in the saved config.json
+    /// without disturbing the in-memory working configuration.
+    /// </summary>
+    private static string? LoadSavedAccountInfoFingerprint()
+    {
+        try
+        {
+            return ConfigService.Load().AccountInfoFingerprint;
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Exception("Startup", "Read saved AccountInfo fingerprint", ex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Migrates older saved A1 hunter sizing to the current micro-only shape and
+    /// safe retry intervals, persisting the result when possible. Only these
+    /// resource fields are changed; credentials, OCIDs, and security options are preserved.
     /// </summary>
     private static void ApplyStartupMigrations(AppConfig config)
     {
-        var migratedHunterSizing = MigrateHunterSizing(config);
+        var migratedShape = MigrateLegacyShape(config);
         var migratedRetryIntervals = MigrateRetryIntervals(config);
-        if (!migratedHunterSizing && !migratedRetryIntervals) return;
+        if (!migratedShape && !migratedRetryIntervals) return;
 
         try
         {
             ConfigService.Save(config);
-            if (migratedHunterSizing)
+            if (migratedShape)
                 DiagnosticLog.Info("Startup",
-                    $"Migrated saved hunter sizing to {AppConfig.HunterMaxOcpus} OCPU / " +
-                    $"{AppConfig.HunterMaxMemoryGb} GB RAM.");
+                    $"Migrated saved hunter shape to {AppConfig.MicroShape} (fixed 1/8 OCPU / 1 GB RAM).");
             if (migratedRetryIntervals)
                 DiagnosticLog.Info("Startup",
                     $"Migrated saved retry interval to randomized {AppConfig.DefaultMinRetrySeconds}–{AppConfig.DefaultMaxRetrySeconds} second delays.");
@@ -111,26 +163,6 @@ internal static class Program
             DiagnosticLog.Warn("Startup",
                 "Could not save migrated hunter settings to config.json; the safe values remain active for this run.");
         }
-    }
-
-    /// <summary>
-    /// A session path can remain in config after its files were deleted or
-    /// partially written. Do not let that stale path send the user straight
-    /// to the Setup Wizard with a broken auth provider.
-    /// </summary>
-    private static void ClearStaleSessionPath(AppConfig config)
-    {
-        if (string.IsNullOrWhiteSpace(config.SessionConfigPath)) return;
-
-        DiagnosticLog.Info("Startup", "Validating configured OCI session.");
-        var configuredSession = OciBrowserLogin.LoadSession(config.SessionConfigPath);
-        if (configuredSession == null || !OciBrowserLogin.IsSessionUsable(configuredSession))
-        {
-            DiagnosticLog.Warn("Startup", "Configured OCI session was missing, incomplete, or unusable; clearing the stale path.");
-            config.SessionConfigPath = null;
-        }
-        else
-            DiagnosticLog.Info("Startup", "Configured OCI session is usable.");
     }
 
     /// <summary>
@@ -157,10 +189,11 @@ internal static class Program
             DiagnosticLog.Warn("Startup", diagnostic);
             if (hasExplicitAccountInfoBundle)
             {
-                MessageBox.Show(
-                    $"OracleHost found the AccountInfo folder, but could not use its credentials.\n\n" +
-                    $"{DiagnosticLog.Redact(diagnostic)}\n\nDetailed diagnostics:\n{DiagnosticLog.LogPath}",
-                    "OracleHost Credential Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                // Show the field-by-field report so the user can see exactly
+                // which items are missing; the log line above explains any
+                // non-obvious failure such as a fingerprint mismatch.
+                new AccountInfoReportWindow(
+                    AccountInfoReport.Inspect(accountInfoDirectory)).ShowDialog();
                 return false;
             }
             return true;
@@ -178,7 +211,7 @@ internal static class Program
             : "AccountInfo credentials discovered; using the local private-key path without copying key contents.");
         accountInfo.Shape = config.Shape;
         accountInfo.Ocpus = config.Ocpus;
-        accountInfo.MemoryInGb = config.MemoryInGb;
+        accountInfo.MemoryInGbs = config.MemoryInGbs;
         accountInfo.ImageOs = config.ImageOs;
         accountInfo.ImageVersion = config.ImageVersion;
         accountInfo.DisplayName = config.DisplayName;
@@ -192,62 +225,10 @@ internal static class Program
         accountInfo.OciConfigPath = config.OciConfigPath;
         accountInfo.BootVolumeSizeGb = config.BootVolumeSizeGb;
         accountInfo.AvailabilityDomains = config.AvailabilityDomains;
-        accountInfo.EncryptSessionTokens = config.EncryptSessionTokens;
-        // The verified AccountInfo API key is authoritative. Do not let a
-        // stale browser session take priority later in OciService.
-        accountInfo.SessionConfigPath = null;
-        accountInfo.OciIdentityDomain = null;
-        accountInfo.OciOauthClientId = null;
         config = accountInfo;
+        config.AccountInfoFingerprint =
+            ConfigService.ComputeAccountInfoFingerprint(accountInfoDirectory);
         adopted = true;
-        return true;
-    }
-
-    /// <summary>
-    /// Reuses an existing session or shows the LoginForm when no usable
-    /// authentication exists. Returns false if the user cancelled the login.
-    /// </summary>
-    private static bool RunAuthenticationFlow(ref AppConfig config, out bool browserLoginCompleted)
-    {
-        browserLoginCompleted = false;
-        var hasUsableApiCredentials = config.HasCredentials &&
-            File.Exists(Environment.ExpandEnvironmentVariables(config.KeyFilePath!));
-
-        // Only credentials saved in OracleHost's config, or a captured session,
-        // count as an authenticated startup. Do not import ~/.oci/config here:
-        // LoginForm loads it for API-key convenience, but must still be shown so
-        // a new user is directed to the browser sign-in flow.
-
-        // Reuse a previously captured/browser-compatible session only when
-        // OracleHost has no saved API-key credentials. If API keys are saved but
-        // no session exists, still show LoginForm so browser sign-in is offered.
-        if (!hasUsableApiCredentials && !config.HasSession)
-        {
-            var existingSession = OciBrowserLogin.FindExistingSession();
-            if (existingSession != null && OciBrowserLogin.IsSessionUsable(existingSession))
-            {
-                config.SessionConfigPath = existingSession.SessionConfigPath;
-                config.Region ??= existingSession.Region;
-                DiagnosticLog.Info("Startup", "Using the newest usable OCI session discovered on disk.");
-            }
-        }
-
-        // Only show LoginForm when neither API-key credentials nor a captured
-        // session exist. AccountInfo PEM credentials are already complete and
-        // should go directly to setup/dashboard instead of the OAuth detour.
-        if (!hasUsableApiCredentials && !config.HasSession)
-        {
-            using var loginForm = new LoginForm(config);
-            DiagnosticLog.Info("Startup", "Opening LoginForm because no usable authentication was found.");
-            if (loginForm.ShowDialog() != DialogResult.OK)
-            {
-                DiagnosticLog.Warn("Startup", "LoginForm was cancelled.");
-                return false;
-            }
-            config = loginForm.ResultConfig ?? config;
-            browserLoginCompleted = loginForm.BrowserLoginCompleted;
-        }
-
         return true;
     }
 
@@ -258,53 +239,45 @@ internal static class Program
             !string.IsNullOrWhiteSpace(config.SubnetOcid))
             return true;
 
-        DiagnosticLog.Info("Startup", "Opening SetupWizard because compartment or subnet is missing.");
-        using var wizardForm = new SetupWizardForm(config);
-        if (wizardForm.ShowDialog() != DialogResult.OK)
+        DiagnosticLog.Info("Startup", "Opening Settings because compartment or subnet is missing.");
+        var settingsWindow = new SettingsWindow(config);
+        if (settingsWindow.ShowDialog() != true)
         {
-            DiagnosticLog.Warn("Startup", "SetupWizard was cancelled.");
+            DiagnosticLog.Warn("Startup", "Settings were cancelled.");
             return false;
         }
-        config = wizardForm.ResultConfig;
+        config = settingsWindow.ResultConfig;
         return true;
     }
 
     /// <summary>
-    /// Validates the config, re-running the Setup Wizard until it passes so a
-    /// malformed field cannot reach the hunt loop. Returns false when cancelled.
+    /// Validates the final configuration. A complete AccountInfo bundle already
+    /// provides every field the wizard would set, so failures are reported as a
+    /// single error instead of reopening the Setup Wizard.
     /// </summary>
-    private static bool ValidateConfigWithWizardRetries(ref AppConfig config)
+    private static bool ValidateConfig(bool fromCompleteAccountInfo, AppConfig config)
     {
         DiagnosticLog.Info("Startup", "Validating final instance configuration.");
-        List<string> problems;
-        while ((problems = config.Validate()).Count > 0)
-        {
-            var message = "Configuration errors:\n\n" + string.Join("\n", problems.Select(p => "• " + p));
-            message += "\n\nRun the Setup Wizard to fix these issues.";
-            DiagnosticLog.Warn("Startup", $"Configuration validation failed: {string.Join(" | ", problems)}");
-            MessageBox.Show(message + $"\n\nDetailed diagnostics: {DiagnosticLog.LogPath}", "OracleHost - Configuration Error",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        var problems = config.Validate();
+        if (problems.Count == 0)
+            return true;
 
-            using var wizardForm = new SetupWizardForm(config);
-            if (wizardForm.ShowDialog() != DialogResult.OK)
-            {
-                DiagnosticLog.Warn("Startup", "SetupWizard was cancelled.");
-                return false;
-            }
-            config = wizardForm.ResultConfig;
-        }
-        return true;
+        var message = "Configuration errors:\n\n" + string.Join("\n", problems.Select(p => "• " + p));
+        if (!fromCompleteAccountInfo)
+            message += "\n\nRun the Setup Wizard to fix these issues.";
+        else
+            message += "\n\nFix the AccountInfo bundle or the saved configuration and restart.";
+        DiagnosticLog.Warn("Startup", $"Configuration validation failed: {string.Join(" | ", problems)}");
+        System.Windows.MessageBox.Show(message + $"\n\nDetailed diagnostics: {DiagnosticLog.LogPath}", "OracleHost - Configuration Error",
+            System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+        return false;
     }
 
-    private static bool MigrateHunterSizing(AppConfig config)
+    private static bool MigrateLegacyShape(AppConfig config)
     {
-        var changed = config.Ocpus != AppConfig.HunterMaxOcpus ||
-                      config.MemoryInGb != AppConfig.HunterMaxMemoryGb;
-        if (!changed) return false;
-
-        config.Ocpus = AppConfig.HunterMaxOcpus;
-        config.MemoryInGb = AppConfig.HunterMaxMemoryGb;
-        return true;
+        // Shape is a supported, user-selectable setting (E2.1.Micro or
+        // A1.Flex). Nothing to migrate; validation enforces the allowed values.
+        return false;
     }
 
     private static bool MigrateRetryIntervals(AppConfig config)
@@ -334,8 +307,20 @@ internal static class Program
         var publicPath = privatePath + ".pub";
         try
         {
-            if (!File.Exists(publicPath) && !File.Exists(privatePath))
-                CryptoHelper.GenerateSshKeyPair(privatePath);
+            if (!File.Exists(publicPath))
+            {
+                if (File.Exists(privatePath))
+                {
+                    // The private half survived but the public half is gone
+                    // (e.g. after a partial cleanup). Derive it instead of
+                    // generating a brand-new pair so existing VMs stay usable.
+                    CryptoHelper.DeriveSshPublicKey(privatePath, publicPath);
+                }
+                else
+                {
+                    CryptoHelper.GenerateSshKeyPair(privatePath);
+                }
+            }
             if (File.Exists(publicPath))
                 config.SshPublicKeyPath = publicPath;
         }

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.IO;
 
 namespace OracleHost.Helpers;
 
@@ -98,6 +99,43 @@ public static class CryptoHelper
                 $"SSH key at {expanded} does not look like a public key (must start with 'ssh-rsa' or 'ssh-ed25519').");
 
         return key;
+    }
+
+    /// <summary>
+    /// Regenerates the .pub file from an existing private key. Used when the
+    /// public half was deleted but the private half is still present.
+    /// </summary>
+    public static void DeriveSshPublicKey(string privatePath, string publicPath)
+    {
+        var expandedPrivate = Environment.ExpandEnvironmentVariables(privatePath);
+        var expandedPublic = Environment.ExpandEnvironmentVariables(publicPath);
+        if (!File.Exists(expandedPrivate))
+            throw new FileNotFoundException($"SSH private key not found at {expandedPrivate}");
+
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "ssh-keygen",
+            Arguments = $"-y -f \"{expandedPrivate}\"",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var process = System.Diagnostics.Process.Start(psi);
+        process?.WaitForExit(10000);
+
+        if (process?.ExitCode != 0)
+        {
+            var error = process?.StandardError.ReadToEnd();
+            throw new InvalidOperationException($"ssh-keygen could not derive the public key: {error}");
+        }
+
+        var publicKey = process!.StandardOutput.ReadToEnd().Trim();
+        if (string.IsNullOrEmpty(publicKey))
+            throw new InvalidOperationException("ssh-keygen returned an empty public key.");
+
+        File.WriteAllText(expandedPublic, publicKey + Environment.NewLine);
     }
 
     /// <summary>

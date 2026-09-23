@@ -2,6 +2,7 @@ using System.Text;
 using Newtonsoft.Json;
 using OracleHost.Helpers;
 using OracleHost.Models;
+using System.IO;
 
 namespace OracleHost.Services;
 
@@ -25,6 +26,38 @@ public static class ConfigService
 
     public static string DefaultConfigPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "OracleHost", "config.json");
+
+    /// <summary>
+    /// Stable content fingerprint of an AccountInfo bundle: SHA-256 over the
+    /// information.md contents plus the names and last-write timestamps of the
+    /// PEM files. Never includes key material itself. Stored in config.json so
+    /// startup can skip rewriting the file when nothing changed.
+    /// </summary>
+    public static string ComputeAccountInfoFingerprint(string accountDirectory)
+    {
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        void Feed(byte[] bytes) => sha.TransformBlock(bytes, 0, bytes.Length, null, 0);
+        Feed(System.Text.Encoding.UTF8.GetBytes("v1\n"));
+
+        var metadataPath = Path.Combine(accountDirectory, "information.md");
+        if (File.Exists(metadataPath))
+        {
+            Feed(System.Text.Encoding.UTF8.GetBytes("information.md\n"));
+            Feed(File.ReadAllBytes(metadataPath));
+        }
+
+        if (Directory.Exists(accountDirectory))
+        {
+            foreach (var pem in Directory.EnumerateFiles(accountDirectory, "*.pem").Order(StringComparer.OrdinalIgnoreCase))
+            {
+                var name = Path.GetFileName(pem);
+                Feed(System.Text.Encoding.UTF8.GetBytes($"{name}\n{File.GetLastWriteTimeUtc(pem):O}\n"));
+            }
+        }
+
+        sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+        return Convert.ToHexString(sha.Hash!);
+    }
 
     public static AppConfig Load(string? path = null)
     {

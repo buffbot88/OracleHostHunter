@@ -11,12 +11,13 @@ using Oci.LimitsService.Requests;
 using OracleHost.Helpers;
 using OracleHost.Models;
 using Image = Oci.CoreService.Models.Image;
+using System.IO;
 
 namespace OracleHost.Services;
 
 /// <summary>
 /// Wraps the OCI .NET SDK for compute, networking, identity, and limits operations.
-/// Auth prefers a captured browser session, then inline API keys, then ~/.oci/config.
+/// Auth uses inline API keys (from AccountInfo), then ~/.oci/config.
 /// </summary>
 public class OciService : IDisposable
 {
@@ -26,8 +27,6 @@ public class OciService : IDisposable
     private LimitsClient? _limits;
     private string? _tenancyId;
     private string? _tempConfigPath;
-    private string? _sessionTempDirectory;
-    private FileStream? _sessionTempLock;
 
     public bool IsConfigured => _compute != null && _identity != null;
     public string? Region { get; private set; }
@@ -46,8 +45,8 @@ public class OciService : IDisposable
         catch (Exception ex)
         {
             DiagnosticLog.Exception("OCI Auth", "Initialize OCI clients", ex);
-            // If provider construction fails after creating a decrypted token
-            // copy, do not leave it behind while the caller handles the error.
+            // If provider construction fails after writing a temp config, do
+            // not leave it behind while the caller handles the error.
             Dispose();
             throw;
         }
@@ -55,74 +54,7 @@ public class OciService : IDisposable
 
     private IAuthenticationDetailsProvider CreateAuthProvider(AppConfig config)
     {
-        // 1) Browser-captured session token ("Sign in with Oracle") takes priority
-        // A configured path is an explicit user choice even when the file has
-        // since been deleted; do not silently replace it with another session.
-        var explicitlyConfiguredSession = !string.IsNullOrWhiteSpace(config.SessionConfigPath);
-        var session = ResolveSession(config);
-        if (explicitlyConfiguredSession && (session == null || !session.IsValid))
-        {
-            throw new InvalidOperationException(
-                "The configured OCI session is missing or incomplete. " +
-                "Sign in again from the login screen.");
-        }
-        if (session != null && session.IsValid)
-        {
-            try
-            {
-                _tenancyId = session.TenancyOcid;
-                MigrateSessionIfEnabled(session, config.EncryptSessionTokens);
-                var provider = CreateSessionProvider(session);
-
-                // If the token is close to expiring, refresh it via the stored refresh token
-                if (!provider.IsSessionTokenValid() && !string.IsNullOrEmpty(config.OciIdentityDomain))
-                {
-                    var renewed = OciBrowserLogin.RenewAsync(
-                        session, config.OciIdentityDomain, config.OciOauthClientId ?? "",
-                        encryptSessionTokens: config.EncryptSessionTokens)
-                        .GetAwaiter().GetResult();
-                    if (renewed)
-                    {
-                        provider = CreateSessionProvider(session);
-                    }
-                    else
-                    {
-                        throw new InvalidOperationException(
-                            "Your Oracle session has expired and could not be refreshed. " +
-                            "Sign in again from the login screen.");
-                    }
-                }
-
-                return provider;
-            }
-            catch (InvalidOperationException)
-            {
-                throw; // explicit, actionable message - don't hide it
-            }
-            catch (PlatformNotSupportedException)
-            {
-                throw; // DPAPI was requested but is unavailable; do not bypass it
-            }
-            catch (Exception ex)
-            {
-                // Never silently bypass an explicitly selected session or a
-                // protected session. Falling back here could hide a DPAPI
-                // failure and unexpectedly use a different identity.
-                if (explicitlyConfiguredSession || config.EncryptSessionTokens ||
-                    SessionTokenProtector.IsProtectedFile(session.TokenPath))
-                {
-                    throw new InvalidOperationException(
-                        "The configured OCI session could not be used. " +
-                        "Sign in again if the session is unreadable or expired.", ex);
-                }
-
-                // A discovered plaintext OCI CLI session remains compatible with
-                // the existing API-key fallback behavior.
-                DiagnosticLog.Warn("OCI Auth", $"Discovered session could not be used; falling back to API-key/config authentication: {ex.Message}");
-            }
-        }
-
-        // 2) Inline API-key credentials: verify the selected private key really
+        // 1) Inline API-key credentials: verify the selected private key really
         // produces the configured fingerprint before asking OCI to sign anything.
         // This prevents a stale config path/fingerprint pair from producing the
         // SDK's vague "authentication was incorrect" response.
@@ -134,7 +66,7 @@ public class OciService : IDisposable
             return new ConfigFileAuthenticationDetailsProvider(_tempConfigPath, "DEFAULT");
         }
 
-        // 3) Existing ~/.oci/config file
+        // 2) Existing ~/.oci/config file
         var resolvedPath = GetOciConfigPath(config);
         if (File.Exists(resolvedPath))
         {
@@ -150,75 +82,9 @@ public class OciService : IDisposable
             }
         }
 
-        DiagnosticLog.Error("OCI Auth", "No usable OCI credentials were found after checking configured sessions, inline API credentials, and ~/.oci/config.");
+        DiagnosticLog.Error("OCI Auth", "No usable OCI credentials were found after checking inline API credentials and ~/.oci/config.");
         throw new InvalidOperationException(
-            "No OCI credentials found. Sign in with Oracle, run the Setup Wizard, or configure ~/.oci/config.");
-    }
-
-    private SessionTokenAuthenticationDetailsProvider CreateSessionProvider(OciSession session)
-    {
-        var configPath = session.SessionConfigPath;
-        var tokenPath = session.TokenPath;
-
-        if (SessionTokenProtector.IsProtectedFile(session.TokenPath))
-        {
-            if (_sessionTempDirectory == null)
-            {
-                var temporarySession = SessionTokenProtector.CreatePrivateTemporaryDirectory();
-                _sessionTempDirectory = temporarySession.Directory;
-                _sessionTempLock = temporarySession.OwnerLock;
-            }
-            tokenPath = Path.Combine(_sessionTempDirectory, "token");
-            SessionTokenProtector.WriteTemporaryPlaintextFile(
-                tokenPath, SessionTokenProtector.ReadFile(session.TokenPath));
-
-            configPath = Path.Combine(_sessionTempDirectory, "config");
-            File.WriteAllText(configPath,
-                $"[DEFAULT]\n" +
-                $"user={session.UserOcid}\n" +
-                $"fingerprint={session.Fingerprint}\n" +
-                $"tenancy={session.TenancyOcid}\n" +
-                $"region={session.Region}\n" +
-                $"security_token_file={tokenPath}\n" +
-                $"key_file={session.KeyPath}\n");
-        }
-
-        return new SessionTokenAuthenticationDetailsProvider(
-            configPath, "DEFAULT",
-            new FilePrivateKeySupplier(session.KeyPath, new System.Security.SecureString()));
-    }
-
-    private static void MigrateSessionIfEnabled(OciSession session, bool encrypt)
-    {
-        if (!encrypt) return;
-        if (!SessionTokenProtector.IsSupported)
-            throw new PlatformNotSupportedException(
-                "EncryptSessionTokens is enabled, but Windows DPAPI is unavailable.");
-
-        SessionTokenProtector.ProtectFileInPlace(session.TokenPath);
-        if (File.Exists(session.RefreshTokenPath))
-            SessionTokenProtector.ProtectFileInPlace(session.RefreshTokenPath);
-    }
-
-    /// <summary>
-    /// Resolves the session to use for auth: the explicitly configured session, or the
-    /// most recently used session under ~/.oci/sessions (created here or by the OCI CLI).
-    /// </summary>
-    private static OciSession? ResolveSession(AppConfig config)
-    {
-        if (!string.IsNullOrWhiteSpace(config.SessionConfigPath))
-            return OciBrowserLogin.LoadSession(config.SessionConfigPath);
-
-        // A saved API-key configuration is authoritative unless the user
-        // explicitly selected a session path. Do not silently discover an
-        // unrelated ~/.oci/sessions identity and use it instead.
-        if (config.HasCredentials)
-            return null;
-
-        var found = OciBrowserLogin.FindExistingSession();
-        if (found != null)
-            config.SessionConfigPath = found.SessionConfigPath;
-        return found;
+            "No OCI credentials found. Provide the AccountInfo folder or configure ~/.oci/config.");
     }
 
     private static void ValidateApiKeyCredentials(AppConfig config)
@@ -358,11 +224,6 @@ public class OciService : IDisposable
             CompartmentId = config.CompartmentOcid,
             DisplayName = config.DisplayName,
             Shape = config.Shape,
-            ShapeConfig = new LaunchInstanceShapeConfigDetails
-            {
-                Ocpus = config.Ocpus,
-                MemoryInGBs = config.MemoryInGb
-            },
             SourceDetails = sourceDetails,
             SubnetId = config.SubnetOcid,
             // This is an ephemeral public IP assignment on the selected public
@@ -374,6 +235,21 @@ public class OciService : IDisposable
             Metadata = new Dictionary<string, string> { { "ssh_authorized_keys", sshKey } }
         };
 
+        // Fixed shapes (the E2 micro) must NOT receive a ShapeConfig — their
+        // sizing is defined by the shape itself. Flexible shapes (A1.Flex)
+        // require it, clamped to the Always Free allotment.
+        if (config.IsFlexibleShape)
+        {
+            var ocpus = Math.Clamp(config.Ocpus ?? AppConfig.AlwaysFreeA1OcpuCount,
+                1, AppConfig.AlwaysFreeA1OcpuCount);
+            var memory = Math.Clamp(config.MemoryInGbs ?? ocpus * 6, ocpus, ocpus * 6);
+            details.ShapeConfig = new LaunchInstanceShapeConfigDetails
+            {
+                Ocpus = ocpus,
+                MemoryInGBs = memory
+            };
+        }
+
         var request = new LaunchInstanceRequest { LaunchInstanceDetails = details };
         var response = await _compute!.LaunchInstance(request, cancellationToken: ct);
         return response.Instance;
@@ -381,17 +257,27 @@ public class OciService : IDisposable
 
     private static void ValidateAlwaysFreeLaunch(AppConfig config)
     {
-        if (!string.Equals(config.Shape, "VM.Standard.A1.Flex", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Always Free protection blocked this launch: only VM.Standard.A1.Flex is allowed.");
-        if (config.Ocpus != AppConfig.HunterMaxOcpus || config.MemoryInGb != AppConfig.HunterMaxMemoryGb)
+        var isMicro = string.Equals(config.Shape, AppConfig.MicroShape, StringComparison.OrdinalIgnoreCase);
+        var isA1 = string.Equals(config.Shape, AppConfig.A1FlexShape, StringComparison.OrdinalIgnoreCase);
+        if (!isMicro && !isA1)
             throw new InvalidOperationException(
-                $"Hunter safety protection blocked this launch: each launch must use exactly {AppConfig.HunterMaxOcpus} OCPU / {AppConfig.HunterMaxMemoryGb} GB RAM.");
+                $"Always Free protection blocked this launch: only {AppConfig.MicroShape} or {AppConfig.A1FlexShape} is allowed.");
         if (config.BootVolumeSizeGb.HasValue && config.BootVolumeSizeGb.Value < AppConfig.AlwaysFreeBootVolumeSizeGb)
             throw new InvalidOperationException(
                 $"Always Free protection blocked this launch: boot volume must be at least {AppConfig.AlwaysFreeBootVolumeSizeGb} GB.");
-        if (config.BootVolumeSizeGb.HasValue && config.BootVolumeSizeGb.Value > AppConfig.AlwaysFreeBootVolumeSizeGb)
+        if (config.BootVolumeSizeGb.HasValue && config.BootVolumeSizeGb.Value > AppConfig.AlwaysFreeBlockStorageGb)
             throw new InvalidOperationException(
-                $"Always Free protection blocked this launch: boot volume exceeds the conservative {AppConfig.AlwaysFreeBootVolumeSizeGb} GB setting.");
+                $"Always Free protection blocked this launch: boot volume exceeds the {AppConfig.AlwaysFreeBlockStorageGb} GB Always Free pool.");
+        if (config.IsFlexibleShape)
+        {
+            var ocpus = config.Ocpus ?? AppConfig.AlwaysFreeA1OcpuCount;
+            var memory = config.MemoryInGbs ?? ocpus * 6;
+            if (ocpus < 1 || ocpus > AppConfig.AlwaysFreeA1OcpuCount ||
+                memory < ocpus || memory > AppConfig.AlwaysFreeA1MemoryGb)
+                throw new InvalidOperationException(
+                    $"Always Free protection blocked this launch: A1 sizing must be 1-{AppConfig.AlwaysFreeA1OcpuCount} OCPU " +
+                    $"and {ocpus}-{ocpus * 6} GB memory (within the {AppConfig.AlwaysFreeA1MemoryGb} GB allotment).");
+        }
     }
 
     public async Task<Oci.CoreService.Models.Instance?> GetInstanceAsync(string instanceId, CancellationToken ct = default)
@@ -445,40 +331,30 @@ public class OciService : IDisposable
         return null;
     }
 
-    public async Task<(int? Ocpus, int? MemoryGb)> DetectFreeLimitsAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Reads the Always Free limit for the configured shape. Returns null when
+    /// Oracle reports no usable value for the tenancy.
+    /// </summary>
+    public async Task<int?> DetectAlwaysFreeLimitAsync(AppConfig config, CancellationToken ct = default)
     {
         EnsureConfigured();
         try
         {
-            var adRequest = new ListAvailabilityDomainsRequest { CompartmentId = _tenancyId };
-            var ads = await _identity!.ListAvailabilityDomains(adRequest, cancellationToken: ct);
-            int maxOcpus = 0, maxMem = 0;
-
-            foreach (var ad in ads.Items)
+            var valuesRequest = new ListLimitValuesRequest
             {
-                foreach (var (name, bucket) in new[] { ("standard-a1-core-count", "ocpus"), ("standard-a1-memory-count", "memory") })
-                {
-                    var valuesRequest = new ListLimitValuesRequest
-                    {
-                        CompartmentId = _tenancyId!,
-                        ServiceName = "compute",
-                        AvailabilityDomain = ad.Name,
-                        Name = name
-                    };
-                    var values = await _limits!.ListLimitValues(valuesRequest, cancellationToken: ct);
+                CompartmentId = _tenancyId!,
+                ServiceName = "compute",
+                Name = config.ActiveLimitName
+            };
+            var values = await _limits!.ListLimitValues(valuesRequest, cancellationToken: ct);
 
-                    foreach (var v in values.Items)
-                    {
-                        if (int.TryParse(v.Value?.ToString(), out int val))
-                        {
-                            if (bucket == "ocpus") maxOcpus = Math.Max(maxOcpus, val);
-                            else maxMem = Math.Max(maxMem, val);
-                        }
-                    }
-                }
+            int max = 0;
+            foreach (var v in values.Items)
+            {
+                if (int.TryParse(v.Value?.ToString(), out int val) && val > max)
+                    max = val;
             }
-
-            return (maxOcpus > 0 ? maxOcpus : null, maxMem > 0 ? maxMem : null);
+            return max > 0 ? max : null;
         }
         catch (OperationCanceledException)
         {
@@ -486,10 +362,40 @@ public class OciService : IDisposable
         }
         catch (Exception ex)
         {
-            DiagnosticLog.Exception("OCI", "Detect Always Free limits", ex);
+            DiagnosticLog.Exception("OCI", "Detect Always Free limit", ex);
             throw new InvalidOperationException(
                 "Always Free limits could not be checked. Authentication or permission may be missing.", ex);
         }
+    }
+
+    /// <summary>
+    /// Lists the availability domains that offer the configured shape in this
+    /// tenancy. ListShapes is AD-scoped, so the shape is probed once per AD.
+    /// </summary>
+    public async Task<List<string>> ListShapeAdsWithCapacityAsync(AppConfig config, CancellationToken ct = default)
+    {
+        EnsureConfigured();
+        var adRequest = new ListAvailabilityDomainsRequest { CompartmentId = _tenancyId };
+        var ads = await _identity!.ListAvailabilityDomains(adRequest, cancellationToken: ct);
+
+        var capableAds = new List<string>();
+        foreach (var ad in ads.Items)
+        {
+            var shapeRequest = new ListShapesRequest
+            {
+                CompartmentId = _tenancyId,
+                AvailabilityDomain = ad.Name
+            };
+            var shapes = await _compute!.ListShapes(shapeRequest, cancellationToken: ct);
+            if (shapes.Items.Any(s =>
+                    string.Equals(s.ShapeProp ?? "", config.Shape, StringComparison.OrdinalIgnoreCase)))
+            {
+                capableAds.Add(ad.Name!);
+            }
+        }
+
+        DiagnosticLog.Info("OCI", $"Shape {config.Shape} is offered in {capableAds.Count} of {ads.Items.Count} availability domain(s): {string.Join(", ", capableAds)}");
+        return capableAds;
     }
 
     public async Task<List<Compartment>> ListCompartmentsAsync(CancellationToken ct = default)
@@ -550,12 +456,6 @@ public class OciService : IDisposable
         if (_tempConfigPath != null && File.Exists(_tempConfigPath))
         {
             try { File.Delete(_tempConfigPath); } catch { }
-        }
-        _sessionTempLock?.Dispose();
-        _sessionTempLock = null;
-        if (_sessionTempDirectory != null && Directory.Exists(_sessionTempDirectory))
-        {
-            try { Directory.Delete(_sessionTempDirectory, recursive: true); } catch { }
         }
     }
 }

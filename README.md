@@ -1,14 +1,21 @@
-# OracleHost — Always Free ARM Instance Hunter (Windows Desktop)
+# OracleHost v2 — Always Free Instance Hunter (Windows Desktop)
 
-Oracle's Always Free tier offers an **Ampere A1 (ARM) instance within its published Always Free limits** —
-but capacity is chronically sold out and Oracle's limits/policies can change. The community answer is an
-**auto-retry client**: keep asking Oracle to create the instance every few minutes until capacity opens up.
-This project is exactly that, as a **C# WinForms desktop application** for Windows.
+Oracle's Always Free tier includes two VM shapes this app can hunt:
 
-> **⚠️ 2026 change:** reports indicate Oracle reduced the Always Free A1 allocation in mid-2026 (commonly
-> **2 OCPUs / 12 GB RAM total**, was 4/24) — but it can vary by account and may be grandfathered. That's why
-> the tool **auto-detects your real limit** during preflight and warns if your config asks for more.
-> Always Free egress is **10 TB/month**, not 1 GB.
+- **VM.Standard.E2.1.Micro** (x86) — fixed at 1/8 OCPU / 1 GB RAM, up to 2 instances per tenancy
+- **VM.Standard.A1.Flex** (ARM Ampere) — flexible sizing, Always Free allotment of **2 OCPU / 12 GB**
+  (Oracle reduced this from the original 4 OCPU / 24 GB)
+
+Capacity for both can be sold out in busy regions. The community answer is an **auto-retry client**:
+keep asking Oracle to create the instance every few minutes until capacity opens up. This project is
+exactly that, as a **C# WinForms desktop application** for Windows.
+
+> The hunter **auto-detects your shape quota** (`standard-e2-micro-core-count` or
+> `standard-a1-core-count`) during preflight and **probes which availability domains actually offer
+> the shape** via `ListShapes`, so attempts are never wasted on ADs that cannot serve it. Always Free
+> egress is **10 TB/month**, not 1 GB.
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed in v2.
 
 ---
 
@@ -20,17 +27,18 @@ This project is exactly that, as a **C# WinForms desktop application** for Windo
 - **Rotates availability domains.** Capacity often frees up in only one AD.
 - **Polite pacing.** Randomized 30–60 s intervals by default, so repeated capacity checks are not sent at a fixed cadence.
 - **Preflight checks** validate credentials, detect limits, and warn before hunting.
-- **Conservative hunter protection** blocks non-A1 shapes, caps each launch at **1 OCPU / 4 GB RAM**,
-  fixes the boot volume at 50 GB (OCI's required minimum), and never requests a reserved public IP.
-  The account-wide preflight still checks your detected Always Free allowance and existing usage.
-- **Dark-themed Windows GUI** with a login form, setup wizard, and a live hunting dashboard.
+- **Conservative hunter protection** allows only the two Always Free shapes above. A1 sizing is
+  capped at 2 OCPU / 12 GB and the boot volume at 200 GB (the account-wide Always Free
+  block-storage pool); a 50 GB boot volume minimum is enforced. Ephemeral public IP only.
+  Preflight checks your detected Always Free allowance and existing usage per shape.
+- **Modern dark-themed Windows GUI** with a Settings dialog and a live hunting dashboard.
 
 > **Pro tips from the community:**
 > - **Do not upgrade to Pay-As-You-Go just to improve capacity odds** unless you understand OCI billing.
 >   Always Free resources are intended to remain free within the published limits, but PAYG accounts can be
 >   charged for resources or usage outside those limits.
-> - **The free x86 micro (VM.Standard.E2.1.Micro, 1/8 OCPU / 1 GB) is only available in AD-1** in most regions.
->   It's much easier to grab than an A1, and can run a small service while you hunt for ARM.
+> - Community reports say the micro is often served by **AD-1 only**, but Oracle does not publish this
+>   per region — that's why OracleHost probes every AD with `ListShapes` instead of hardcoding it.
 
 ---
 
@@ -51,57 +59,13 @@ dotnet build
 dotnet run
 ```
 
-The application launches with a dark-themed GUI. If no captured browser session is saved, it opens the
-login form and **opens Oracle Cloud in your browser** so you can complete the browser sign-in flow.
+The application launches with a dark-themed GUI.
 
-### 3. Sign in with Oracle (pick one)
+### 3. Credentials — the `AccountInfo` folder (required)
 
-**Option A — Browser sign-in (recommended, no API keys needed).** The browser flow uses OAuth2
-(Authorization Code + PKCE) against your identity domain and stores the captured security token as a
-reusable session:
-
-1. In your identity domain, register an OAuth app
-   (Identity & Security → Identity domains → your domain → Applications → Add application):
-   grant type **Authorization Code + PKCE**, redirect URI **`http://localhost:8181/`**.
-2. In the login form, paste the **identity domain URL** and the OAuth **client ID**.
-3. Click **Sign in with Oracle** and complete the sign-in in your browser.
-
-**Option B — API keys.** Enter your Tenancy OCID, User OCID, Fingerprint, and API key path, or click
-**Generate API Keys** to create them. Click **Open Oracle Console** for the OCI user API-key settings;
-do not use the separate Analytics & AI API-keys page. If you already have `~/.oci/config`, the login form
-auto-detects it and pre-fills these fields for you.
-
-**Option C — the `AccountInfo` folder.** A private checkout convention for dropping your OCI credentials
-next to the source tree. See [AccountInfo folder](#accountinfo-folder-optional) below.
-
-### 4. Run the setup wizard (first run only)
-
-The Setup Wizard auto-detects your compartments and subnets from your OCI account. Pick from the dropdowns
-and click Save. If you don't have a VCN yet:
-
-1. Networking → Virtual cloud networks → **Create VCN** (any name, defaults OK).
-2. Open the VCN → **Create subnet** (public subnet).
-3. Add an **ingress security rule** allowing **TCP 22 from 0.0.0.0/0** so you can SSH in later.
-
-### 5. Run the hunt
-
-On the main dashboard, hit **✓ Preflight Check** first (validates credentials and shows your detected
-Always Free limits), then **▶ Start Hunting**. On success you'll get the instance OCID and public IP,
-ready to `ssh opc@<ip>`.
-
-The dashboard provides:
-
-- **✓ Preflight Check** — Validates credentials, detects limits, shows existing instances
-- **⚡ Try Once** — Single launch attempt
-- **▶ Start Hunting** — Continuous retry loop with live status updates
-- **⏹ Stop** — Cancel the current hunt
-
----
-
-## AccountInfo folder (optional)
-
-The `AccountInfo` folder is an **optional shortcut**: put your OCI credentials there and OracleHost
-loads them automatically at startup — no typing OCIDs into the login form.
+OracleHost reads all credentials from a local `AccountInfo` folder next to the project (or the built EXE).
+There is no login screen and no browser sign-in — if the folder is missing or incomplete, OracleHost
+shows one clear error and exits.
 
 > **⚠️ This folder is private. Never commit it, zip it, or share it.** It contains your API private key
 > and your account OCIDs. The whole `AccountInfo/` folder is gitignored by default so `git add .`
@@ -155,7 +119,7 @@ aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99
 
 - **Exactly one private `.pem`** must be present. Its filename must **not** contain the word `public`.
 - **At most one public `.pem`** is allowed. Its filename **must** contain `public`.
-- All four required OCIDs above must be filled in, or OracleHost ignores the folder.
+- All four required OCIDs above must be filled in, or OracleHost exits with an error.
 - OracleHost **derives the fingerprint from the key** — you don't strictly need to write it down.
 
 ### How OracleHost finds it
@@ -164,45 +128,57 @@ On startup, OracleHost walks up the directory tree from the working directory (a
 looking for a folder named `AccountInfo` that contains both `information.md` and a `*.pem`. Place it
 next to the project root and it just works.
 
-### Prefer doing it manually?
+### 4. Instance settings (⚙ Settings)
 
-You don't need this folder at all. The equivalent manual setup is:
+When the AccountInfo bundle is complete, startup skips straight to the dashboard — compartment,
+subnet, and region all come from `information.md` and are never asked for. Open **⚙ Settings** to
+choose the instance shape (**E2.1.Micro** or **A1.Flex**), OCPUs, memory, boot volume size, display
+name, and retry intervals.
 
-1. Go to **cloud.oracle.com** → click your **profile icon** → **User settings** and open the OCI user
-   API-key settings (not **Analytics & AI → API keys**).
-2. Use the OCI account's supported key-pair option and keep the downloaded private PEM on this computer.
-3. Copy the OCI fingerprint shown for that signing key (e.g. `a1:2b:3c:...`).
-4. Place the private key at `C:\Users\<you>\.oci\oci_api_key.pem` and enter the values in the login form.
+> OCPUs and memory are saved for both shapes but only sent to OCI for **A1.Flex** — the micro shape
+> is fixed at 1/8 OCPU / 1 GB and rejects a shape config.
 
-### Protect session token files (optional but recommended)
+If you don't have a VCN yet (needed before any launch):
 
-Enable the **encrypt session tokens** checkbox in the browser login or setup wizard. The encrypted files
-can only be decrypted by the same Windows user on the same Windows installation. Existing plaintext
-session files are migrated the next time OracleHost uses them. OracleHost decrypts only a temporary token
-copy for the OCI SDK and removes it when the OCI service is disposed.
+1. Networking → Virtual cloud networks → **Create VCN** (any name, defaults OK).
+2. Open the VCN → **Create subnet** (public subnet).
+3. Add an **ingress security rule** allowing **TCP 22 from 0.0.0.0/0** so you can SSH in later.
+
+### 5. Run the hunt
+
+On the main dashboard, hit **✓ Preflight Check** first (validates credentials and shows your detected
+Always Free limits), then **▶ Start Hunting**. On success you'll get the instance OCID and public IP,
+ready to `ssh opc@<ip>`.
+
+The dashboard provides:
+
+- **✓ Preflight Check** — Validates credentials, detects limits, shows existing instances
+- **⚡ Try Once** — Single launch attempt
+- **▶ Start Hunting** — Continuous retry loop with live status updates
+- **⏹ Stop** — Cancel the current hunt
 
 ---
 
 ## Project structure
 
 ```
-OracleHost.csproj          # .NET 8 WinForms project, OCI SDK NuGet refs
-Program.cs                 # Entry point: login → wizard → main form flow
+OracleHost.csproj          # .NET 8 WinForms project, OCI SDK NuGet refs, v2.0.0
+CHANGELOG.md               # release history
+Program.cs                 # Entry point: load config → adopt AccountInfo → validate → main form
 Forms/
-├── LoginForm.cs           # OCI credential entry + key generation + browser launch
-├── SetupWizardForm.cs     # Interactive config wizard with auto-detect
-└── MainForm.cs            # Hunting dashboard with live status + activity log
+├── SetupWizardForm.cs     # ⚙ Settings dialog: shape, sizing, boot volume, retries
+├── MainForm.cs            # Hunting dashboard with live status + activity log
+└── AccountInfoReportForm.cs # Startup dialog listing found/missing AccountInfo fields
 Services/
 ├── OciService.cs          # OCI SDK wrapper (compute, identity, networking, limits)
-├── OciBrowserLogin.cs     # OAuth2 auth-code + PKCE browser sign-in, session persistence
 ├── ErrorClassifier.cs     # Retry vs abort error classification
-└── ConfigService.cs       # JSON config load/save + ~/.oci/config reader
+├── ConfigService.cs       # JSON config load/save + AccountInfo reader + ~/.oci/config reader
+└── AccountInfoReport.cs   # Field-by-field AccountInfo bundle inspection
 Models/
 ├── AppConfig.cs           # Configuration model (config.json schema)
 └── HuntStatus.cs          # Runtime hunt state tracking
 Helpers/
 ├── CryptoHelper.cs        # RSA key generation + OCI fingerprint computation
-├── SessionTokenProtector.cs  # Optional Windows DPAPI token protection + temp-file handling
 └── DiagnosticLog.cs       # Diagnostic logging
 ```
 
@@ -215,51 +191,24 @@ The app stores its config at `%USERPROFILE%\OracleHost\config.json`.
 | Key | Default | Meaning |
 |---|---|---|
 | `region` | `null` | Region override (defaults to `~/.oci/config`) |
-| `session_config_path` | auto | Browser-captured session config (falls back to newest session under `~/.oci/sessions/`) |
-| `oci_identity_domain` | `null` | Identity domain URL used for browser sign-in |
-| `oci_oauth_client_id` | `null` | OAuth client ID used for browser sign-in |
-| `encrypt_session_tokens` | `false` | Protect browser-session `token` and `refresh_token` files with Windows DPAPI for the current user |
 | `compartment_ocid` | — | **required** — compartment to launch into |
 | `subnet_ocid` | — | **required** — subnet to attach the instance to |
 | `ssh_public_key_path` | `~/.ssh/id_rsa.pub` | Your public key (must start with `ssh-rsa`) |
-| `shape` | `VM.Standard.A1.Flex` | Instance shape (the free ARM one) |
-| `ocpus` | `1` | OCPUs per hunter launch (conservatively capped at 1) |
-| `memory_in_gb` | `4` | RAM per hunter launch (conservatively capped at 4 GB) |
+| `shape` | `VM.Standard.E2.1.Micro` | `VM.Standard.E2.1.Micro` or `VM.Standard.A1.Flex` |
+| `ocpus` | `2` (A1) | A1.Flex OCPU count (1–2, Always Free cap). Saved for both shapes but only sent for A1.Flex |
+| `memory_in_gbs` | `12` (A1) | A1.Flex memory in GB (1–12; OCI allows 1–6 GB per OCPU). Only sent for A1.Flex |
 | `image_os` | `Oracle Linux` | OS to resolve (`Oracle Linux`, `Canonical Ubuntu`, …) |
 | `image_version` | `latest` | `latest` or a substring of the image display name |
-| `display_name` | `free-tier-arm` | Instance name |
+| `display_name` | `free-tier-micro` | Instance name |
 | `assign_public_ip` | `true` | Attach a public IP |
-| `boot_volume_size_gb` | `50` at launch | OCI-required minimum boot volume; OracleHost blocks values above 50 GB and the published Always Free pool is 200 GB total across boot/block volumes |
+| `boot_volume_size_gb` | `50` | 50–200 GB; OCI-required minimum is 50, and the published Always Free pool is 200 GB total across boot/block volumes |
+| `account_info_fingerprint` | — | SHA-256 of the AccountInfo bundle; config.json is only rewritten when the bundle changes |
 | `availability_domains` | `"all"` | `"all"`, one AD, or a list of ADs |
 | `min_interval_seconds` | `30` | Minimum randomized retry delay in seconds |
 | `max_interval_seconds` | `60` | Maximum randomized retry delay in seconds |
 | `stop_on_limit` | `true` | Abort on `LimitExceeded` instead of retrying |
 | `max_attempts` | `0` | `0` = unlimited |
 | `allow_existing` | `false` | Skip the "instance already exists" sanity check |
-
----
-
-## Session-token protection
-
-Session encryption is **optional and disabled by default** to preserve compatibility with the OCI CLI.
-When `encrypt_session_tokens` is `true`:
-
-- OracleHost wraps `token` and `refresh_token` with Windows DPAPI using `DataProtectionScope.CurrentUser`.
-- The setting is stored in `%USERPROFILE%\OracleHost\config.json`.
-- Existing plaintext files are migrated atomically when the session is used.
-- A session protected for another Windows account or installation cannot be recovered by OracleHost;
-  sign in again to create a new one.
-- The OCI CLI and other tools cannot read OracleHost's DPAPI-wrapped files. Disable encryption only for a
-  newly created/shared plaintext session; already protected files remain protected until you explicitly
-  recreate the session.
-- The private key remains in its existing session file because OCI session signing still requires the SDK
-  to read it.
-- The temporary SDK copy is protected by a current-user-only directory and is removed during normal
-  shutdown. Cleanup is best effort; if the process crashes, stale `OracleHost/session-*` directories are
-  removed on a later startup when they are not locked by another running instance.
-
-The encrypted file format has an OracleHost marker and is not a replacement for Windows account security
-or full-disk encryption.
 
 ---
 
@@ -286,12 +235,10 @@ you what to fix instead.
   `eu-frankfurt-1`, or newer home regions than in the crowded US-East.
 - **Run off-peak** — late night / early morning local time.
 - **Keep it running** — leave the app hunting in the background; capacity can free up at any moment.
-- **Rotate ADs** — the default `"all"` handles this for you. A1 is available in any availability domain
-  (per the console), so all ADs are fair game.
-- **Watch your total** — the hunter requests only 1 OCPU / 4 GB per launch, while the account-wide A1
-  allowance can vary. The preflight shows your detected limit and existing usage before hunting.
-- **Grab a micro meanwhile** — the free `VM.Standard.E2.1.Micro` x86 instance (AD-1 only) can be created
-  almost immediately and gives you a working VPS while the A1 hunt continues.
+- **Rotate ADs** — the default `"all"` handles this for you, and OracleHost only rotates across ADs
+  that `ListShapes` confirms actually offer the micro in your tenancy.
+- **Watch your total** — the Always Free allowance is 2 micro instances (`standard-e2-micro-core-count` = 2)
+  and 2 A1 OCPUs / 12 GB (`standard-a1-core-count`). Preflight counts existing usage per shape before hunting.
 
 > **Keep your free instance busy!** Oracle reclaims Always Free instances that stay idle
 > (95th-percentile CPU/network/memory all below 20% for 7 straight days). Run a real workload or a
@@ -303,16 +250,16 @@ you what to fix instead.
 
 | Problem | Fix |
 |---|---|
-| `OCI credential problem` | `~/.oci/config` missing/invalid — redo credentials setup or re-enter them in the login form |
+| `No OCI credentials found` / AccountInfo error | Check the folder rules above: one private PEM, four required OCIDs, folder named `AccountInfo` next to the project or EXE |
 | `SSH public key not found` | `ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa` then re-run |
 | `No ... images found` | Try `"image_os": "Canonical Ubuntu"` or check the region |
 | `None of the requested ADs exist` | Delete the `availability_domains` key or use `"all"` |
-| `You already have ... A1 instance(s)` | Delete an instance, reduce `ocpus`/`memory_in_gb`, or set `"allow_existing": true` |
-| Preflight says config exceeds detected limit | The hunter defaults to 1 OCPU / 4 GB; verify your account's detected A1 allowance and existing usage |
+| `You already have ... micro instance(s)` | Delete an instance or set `"allow_existing": true` (the Always Free allowance is 2 micro instances) |
+| A1 launch rejected or preflight complains about OCPUs/memory | A1 sizing must stay within 2 OCPU / 12 GB with 1–6 GB per OCPU; adjust in ⚙ Settings |
+| Preflight says the shape is offered in no AD | Your region may not serve that shape; check Limits, Quotas and Usage for the shape's limit name (`standard-e2-micro-core-count` / `standard-a1-core-count`) |
 | Instance created but SSH fails | Check the security list allows TCP 22; wait ~2 min for boot |
 | Build error `NU1101: Unable to find package` | Ensure you have .NET 8+ SDK installed (`dotnet --version`) |
-| `SimpleAuthenticationDetailsProvider` errors | Ensure your `~/.oci/config` file is valid or re-enter credentials in the login form |
-| OracleHost ignores my `AccountInfo` folder | Check the folder rules in [AccountInfo folder](#accountinfo-folder-optional): one private PEM, four required OCIDs |
+| OracleHost ignores my `AccountInfo` folder | Check the folder rules above: one private PEM, four required OCIDs |
 
 ---
 

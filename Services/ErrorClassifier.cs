@@ -1,6 +1,8 @@
 using System.Net;
 using Oci.Common.Model;
 
+using System.Net.Http;
+
 namespace OracleHost.Services;
 
 /// <summary>
