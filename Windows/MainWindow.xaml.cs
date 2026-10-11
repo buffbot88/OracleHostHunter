@@ -535,7 +535,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            var result = await RunOneAttemptAsync(_cts.Token);
+            var result = await RunOneAttemptAsync(_cts?.Token ?? CancellationToken.None);
             if (result == "success")
             {
                 AppendLog($"✅ Instance created! IP: {_status.PublicIp}");
