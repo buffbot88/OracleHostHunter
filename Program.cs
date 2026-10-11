@@ -172,7 +172,8 @@ internal static class Program
     {
         var migratedShape = MigrateLegacyShape(config);
         var migratedRetryIntervals = MigrateRetryIntervals(config);
-        if (!migratedShape && !migratedRetryIntervals) return;
+        var migratedInstanceCount = MigrateInstanceCount(config);
+        if (!migratedShape && !migratedRetryIntervals && !migratedInstanceCount) return;
 
         try
         {
@@ -183,6 +184,9 @@ internal static class Program
             if (migratedRetryIntervals)
                 DiagnosticLog.Info("Startup",
                     $"Migrated saved retry interval to randomized {AppConfig.DefaultMinRetrySeconds}–{AppConfig.DefaultMaxRetrySeconds} second delays.");
+            if (migratedInstanceCount)
+                DiagnosticLog.Info("Startup",
+                    $"Migrated saved instance count to the {AppConfig.AlwaysFreeMaxInstancesPerShape}-instance per-tier Always Free limit.");
         }
         catch (Exception ex)
         {
@@ -310,6 +314,15 @@ internal static class Program
         // Shape is a supported, user-selectable setting (E2.1.Micro or
         // A1.Flex). Nothing to migrate; validation enforces the allowed values.
         return false;
+    }
+
+    private static bool MigrateInstanceCount(AppConfig config)
+    {
+        if (config.DesiredInstanceCount <= AppConfig.AlwaysFreeMaxInstancesPerShape)
+            return false;
+
+        config.DesiredInstanceCount = AppConfig.AlwaysFreeMaxInstancesPerShape;
+        return true;
     }
 
     private static bool MigrateRetryIntervals(AppConfig config)

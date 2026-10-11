@@ -33,14 +33,13 @@
                         <TextBlock Style="{StaticResource SectionTitle}" Text="1 · How many servers?"/>
                         <TextBlock FontSize="12.5" Foreground="{StaticResource TextMuted}"
                                    TextWrapping="Wrap" Margin="0,0,0,10"
-                                   Text="Names are auto-numbered: my-server-1, my-server-2…"/>
+                                   Text="Choose up to two servers in this compute tier. Scan your tenancy to include resources already in use."/>
+                        <Button x:Name="BtnScanTenancy" Style="{StaticResource GhostButton}"
+                                Background="{StaticResource UtilityBg}" Content="↻  Scan tenancy usage"
+                                HorizontalAlignment="Left" Padding="14,8" Margin="0,0,0,10"
+                                Click="BtnScanTenancy_Click"/>
                         <ComboBox x:Name="ComboInstanceCount" Style="{StaticResource FieldCombo}"
-                                  SelectionChanged="ComboInstanceCount_SelectionChanged">
-                            <ComboBoxItem Content="1 server"/>
-                            <ComboBoxItem Content="2 servers"/>
-                            <ComboBoxItem Content="3 servers"/>
-                            <ComboBoxItem Content="4 servers"/>
-                        </ComboBox>
+                                  SelectionChanged="ComboInstanceCount_SelectionChanged"/>
                         <TextBlock x:Name="TxtInstancePoolNote" Style="{StaticResource HintText}"
                                    Foreground="{StaticResource TextSecondary}"/>
                     </StackPanel>
@@ -65,14 +64,15 @@
                                 <ColumnDefinition Width="12"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0">
+                            <StackPanel x:Name="PanelOcpus" Grid.Column="0">
                                 <TextBlock Style="{StaticResource FieldLabel}" Text="OCPUs per server"/>
-                                <ComboBox x:Name="ComboOcpus" Style="{StaticResource FieldCombo}" SelectedIndex="1">
+                                <ComboBox x:Name="ComboOcpus" Style="{StaticResource FieldCombo}" SelectedIndex="1"
+                                          SelectionChanged="ComboOcpus_SelectionChanged">
                                     <ComboBoxItem Content="1 OCPU"/>
                                     <ComboBoxItem Content="2 OCPUs"/>
                                 </ComboBox>
                             </StackPanel>
-                            <StackPanel Grid.Column="2">
+                            <StackPanel x:Name="PanelMemory" Grid.Column="2">
                                 <TextBlock Style="{StaticResource FieldLabel}" Text="Memory per server"/>
                                 <ComboBox x:Name="ComboMemory" Style="{StaticResource FieldCombo}"
                                           SelectionChanged="ComboMemory_SelectionChanged"/>

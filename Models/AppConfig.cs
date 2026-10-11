@@ -20,7 +20,10 @@ public class AppConfig
     // Monthly A1 metering for the Always Free allotment.
     public const int AlwaysFreeA1OcpuHoursPerMonth = 1500;
     public const int AlwaysFreeA1MemoryGbHoursPerMonth = 9000;
-    public const int AlwaysFreeMaxInstanceCount = 4;
+    // Oracle Always Free allows at most two VMs for each supported compute tier.
+    public const int AlwaysFreeMaxInstancesPerShape = 2;
+    // Legacy name retained for config/UI callers; limit applies per selected shape.
+    public const int AlwaysFreeMaxInstanceCount = AlwaysFreeMaxInstancesPerShape;
     public const int AlwaysFreeMaxBootVolumePoolGb = 200;
     public const int AlwaysFreeMinBootVolumePerInstanceGb = 50;
     // Up to 5 block/boot volume backups may exist at any time.
@@ -77,10 +80,9 @@ public class AppConfig
     public bool AllowExisting { get; set; } = false;
 
     /// <summary>
-    /// Target number of Always Free instances to create with the current
-    /// shared template. 1–4 matches the practical Always Free ceiling when
-    /// all instances use the 50 GB minimum boot volume against the 200 GB
-    /// account-wide pool.
+    /// Target number of instances to create in the selected compute tier.
+    /// Each tier is capped at two instances; the overall 200 GB boot pool is
+    /// shared across tiers and may impose a lower effective count.
     /// </summary>
     public int DesiredInstanceCount { get; set; } = 1;
 
@@ -107,13 +109,44 @@ public class AppConfig
     /// create without exceeding the Always Free boot-volume pool. This assumes
     /// every instance uses the configured boot volume; the minimum enforced
     /// boot volume is 50 GB and the account-wide pool is 200 GB, so the
-    /// theoretical ceiling is 4 instances.
+    /// per-tier ceiling is 2 instances.
     /// </summary>
     public int MaxInstancesFromBootPool =>
         BootVolumeSizeGb.HasValue && BootVolumeSizeGb.Value > 0
-            ? Math.Min(AlwaysFreeMaxInstanceCount,
+            ? Math.Min(AlwaysFreeMaxInstancesPerShape,
                 AlwaysFreeMaxBootVolumePoolGb / BootVolumeSizeGb.Value)
-            : AlwaysFreeMaxInstanceCount;
+            : AlwaysFreeMaxInstancesPerShape;
+
+    /// <summary>
+    /// Maximum instances of the selected shape supported by its per-tier and
+    /// shared resource allowances using the current per-instance sizing.
+    /// </summary>
+    public int MaxInstancesForCurrentTemplate
+    {
+        get
+        {
+            var max = MaxInstancesFromBootPool;
+            if (IsFlexibleShape)
+            {
+                var ocpus = Ocpus ?? AlwaysFreeA1OcpuCount;
+                var memory = MemoryInGbs ?? ocpus * 6;
+                if (ocpus > 0)
+                    max = Math.Min(max, AlwaysFreeA1OcpuCount / ocpus);
+                if (memory > 0)
+                    max = Math.Min(max, AlwaysFreeA1MemoryGb / memory);
+            }
+            else if (string.Equals(Shape, MicroShape, StringComparison.OrdinalIgnoreCase))
+            {
+                max = Math.Min(max, AlwaysFreeMicroInstanceCount);
+            }
+            else
+            {
+                return 0;
+            }
+
+            return Math.Max(0, max);
+        }
+    }
 
     /// <summary>
     /// OCI authentication details (stored separately from instance config).
@@ -146,7 +179,7 @@ public class AppConfig
     /// Free pools can actually support for the current template.
     /// </summary>
     public int EffectiveInstanceCount =>
-        Math.Min(DesiredInstanceCount, MaxInstancesFromBootPool);
+        Math.Min(DesiredInstanceCount, MaxInstancesForCurrentTemplate);
 
     /// <summary>
     /// Builds the per-instance display name for the shared template. The
@@ -192,8 +225,8 @@ public class AppConfig
         if (!isMicro && !isA1)
             problems.Add($"Always Free protection: only {MicroShape} or {A1FlexShape} is allowed.");
 
-        if (DesiredInstanceCount < 1 || DesiredInstanceCount > AlwaysFreeMaxInstanceCount)
-            problems.Add($"Desired instance count must be between 1 and {AlwaysFreeMaxInstanceCount}.");
+        if (DesiredInstanceCount < 1 || DesiredInstanceCount > AlwaysFreeMaxInstancesPerShape)
+            problems.Add($"Desired instance count must be between 1 and {AlwaysFreeMaxInstancesPerShape} for the selected compute tier.");
 
         if (isA1)
         {
@@ -227,6 +260,9 @@ public class AppConfig
         }
 
         var bootPerInstance = BootVolumeSizeGb ?? AlwaysFreeBootVolumeSizeGb;
+        if (DesiredInstanceCount > 0 && DesiredInstanceCount <= AlwaysFreeMaxInstancesPerShape &&
+            DesiredInstanceCount > MaxInstancesForCurrentTemplate)
+            problems.Add($"The selected shape, per-server sizing, and boot volume support at most {MaxInstancesForCurrentTemplate} instance(s) within the Always Free limits.");
         if (bootPerInstance < AlwaysFreeBootVolumeSizeGb)
             problems.Add($"Boot volume must be at least {AlwaysFreeBootVolumeSizeGb} GB because OCI requires a 50 GB minimum.");
         if (bootPerInstance > AlwaysFreeBlockStorageGb)

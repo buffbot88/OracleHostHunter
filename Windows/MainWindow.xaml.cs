@@ -230,7 +230,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private void BtnTour_Click(object sender, RoutedEventArgs e) => ShowTour(0);
+    private void BtnTour_Click(object sender, RoutedEventArgs e)
+    {
+        new OciGuideWindow { Owner = this }.ShowDialog();
+    }
 
     private void BtnTourNext_Click(object sender, RoutedEventArgs e)
     {
@@ -286,6 +289,16 @@ public partial class MainWindow : Window
     private void BtnCopyLog_Click(object sender, RoutedEventArgs e) => CopyToClipboard(TxtLog.Text, "activity log");
     private void BtnCopySsh_Click(object sender, RoutedEventArgs e) => CopyToClipboard($"ssh opc@{_status.PublicIp}", "SSH command");
     private void BtnCopyIp_Click(object sender, RoutedEventArgs e) => CopyToClipboard(_status.PublicIp ?? "", "public IP");
+
+    private void BtnDiagnoseNetwork_Click(object sender, RoutedEventArgs e)
+    {
+        if (_operationRunning)
+        {
+            AppendLog("⚠ Wait for the current OCI operation to finish before running network diagnostics.");
+            return;
+        }
+        new NetworkDiagnosticWindow(_config) { Owner = this }.ShowDialog();
+    }
 
     private void BtnSettings_Click(object sender, RoutedEventArgs e)
     {
@@ -358,7 +371,7 @@ public partial class MainWindow : Window
             TxtStartLabel.Text = "Start Hunting";
             TxtStartSub.Text = "Keep trying automatically";
             TxtStartIcon.Text = "▶";
-            BtnStart.Background = (System.Windows.Media.Brush)FindResource("GreenGrad");
+            BtnStart.Background = (System.Windows.Media.Brush)FindResource("AccentGrad");
             BtnStart.IsEnabled = actionsEnabled;
         }
     }
@@ -412,38 +425,7 @@ public partial class MainWindow : Window
             _status.ImageName = image.DisplayName ?? image.Id;
             AppendLog($"Image: {image.DisplayName}");
 
-            var instances = await oci.ListInstancesAsync(_config.CompartmentOcid, ct);
-            var existingSameShape = instances.Where(i =>
-                i.Shape == _config.Shape &&
-                i.LifecycleState != Instance.LifecycleStateEnum.Terminated &&
-                i.LifecycleState != Instance.LifecycleStateEnum.Terminating).ToList();
-
-            var (allowanceDescription, allowanceCount) = _config.AlwaysFreeAllowance;
-            if (_config.IsFlexibleShape && existingSameShape.Count > 0)
-            {
-                var usedOcpus = existingSameShape
-                    .Sum(i => (double)(i.ShapeConfig?.Ocpus ?? 0));
-                var remaining = Math.Max(0, AppConfig.AlwaysFreeA1OcpuCount - (int)Math.Ceiling(usedOcpus));
-                AppendLog($"⚠ {existingSameShape.Count} existing A1 instance(s) use {usedOcpus:0.#} OCPU(s); " +
-                          $"{remaining} of the {AppConfig.AlwaysFreeA1OcpuCount} Always Free OCPU remain.");
-                if (remaining < (_config.Ocpus ?? 1) && !_config.AllowExisting)
-                    throw new InvalidOperationException(
-                        $"Preflight stopped: the Always Free A1 allotment ({allowanceDescription}) is already used " +
-                        "by existing instances. Delete one or enable AllowExisting before hunting.");
-            }
-            else if (existingSameShape.Count >= allowanceCount)
-            {
-                AppendLog($"⚠ {existingSameShape.Count} existing instance(s) of this shape found.");
-                if (!_config.AllowExisting)
-                    throw new InvalidOperationException(
-                        $"Preflight stopped: {existingSameShape.Count} {_config.Shape} instance(s) already exist, " +
-                        $"which meets the Always Free allowance ({allowanceDescription}). " +
-                        "Delete one or enable AllowExisting before hunting.");
-            }
-            else
-                AppendLog(existingSameShape.Count == 0
-                    ? "No existing instances of this shape - clear to hunt."
-                    : $"{existingSameShape.Count} existing instance(s); hunting for the remaining Always Free allowance.");
+            await ValidateTenancyCapacityAsync(oci, ct);
 
             var limit = await oci.DetectAlwaysFreeLimitAsync(_config, ct);
             if (!limit.HasValue)
@@ -462,7 +444,7 @@ public partial class MainWindow : Window
         {
             DiagnosticLog.Exception("Preflight", "Preflight operation", ex);
             var detail = DescribeAuthenticationFailure(ex);
-            AppendLog($"❌ Preflight failed: {detail}\nDetails: {DiagnosticLog.LogPath}");
+            AppendLog($"❌ Preflight failed: {detail}\\nDetails: {DiagnosticLog.LogPath}");
             _status.State = HuntState.Aborted;
         }
         finally
@@ -470,6 +452,65 @@ public partial class MainWindow : Window
             _operationRunning = false;
             UpdateStatusDisplay();
         }
+    }
+
+    /// <summary>Fails unless the complete visible-tenancy inventory leaves enough Always Free capacity.</summary>
+    private async Task ValidateTenancyCapacityAsync(OciService oci, CancellationToken ct, int? additionalInstances = null)
+    {
+        // Inventory every visible compartment in the tenancy, not just the
+        // selected compartment. Other VMs and volumes consume the same free-tier pools.
+        var usage = await oci.GetTenancyUsageAsync(ct);
+        var activeInstances = usage.Instances.Where(i =>
+            i.LifecycleState != Instance.LifecycleStateEnum.Terminated).ToList();
+        var existingSameShape = activeInstances.Where(i =>
+            string.Equals(i.Shape, _config.Shape, StringComparison.OrdinalIgnoreCase)).ToList();
+        var plannedCount = additionalInstances ?? _config.DesiredInstanceCount;
+        var plannedBootGb = (long)(_config.BootVolumeSizeGb ?? AppConfig.AlwaysFreeBootVolumeSizeGb) * plannedCount;
+        var (allowanceDescription, _) = _config.AlwaysFreeAllowance;
+
+        AppendLog($"Tenancy inventory: {usage.Instances.Count} instance(s) across " +
+                  $"{usage.Instances.Select(i => i.CompartmentId).Distinct().Count()} compartment(s); " +
+                  $"{existingSameShape.Count} active {_config.Shape} instance(s).");
+        AppendLog($"Storage in tenancy: {usage.BootVolumeGb} GB boot + {usage.BlockVolumeGb} GB block = " +
+                  $"{usage.BootVolumeGb + usage.BlockVolumeGb}/{AppConfig.AlwaysFreeBlockStorageGb} GB. " +
+                  $"Requested plan adds {plannedBootGb} GB boot storage.");
+
+        if (_config.IsFlexibleShape)
+        {
+            var existingOcpus = existingSameShape.Sum(i => (double)(i.ShapeConfig?.Ocpus ?? 0));
+            var existingMemoryGb = existingSameShape.Sum(i => (double)(i.ShapeConfig?.MemoryInGBs ?? 0));
+            var requestedOcpus = (_config.Ocpus ?? AppConfig.AlwaysFreeA1OcpuCount) * plannedCount;
+            var requestedMemoryGb = (_config.MemoryInGbs ??
+                (_config.Ocpus ?? AppConfig.AlwaysFreeA1OcpuCount) * 6) * plannedCount;
+            var totalOcpus = existingOcpus + requestedOcpus;
+            var totalMemoryGb = existingMemoryGb + requestedMemoryGb;
+            AppendLog($"A1 tenancy usage: {existingOcpus:0.#}/{AppConfig.AlwaysFreeA1OcpuCount} OCPU, " +
+                      $"{existingMemoryGb:0.#}/{AppConfig.AlwaysFreeA1MemoryGb} GB RAM; requested adds " +
+                      $"{requestedOcpus} OCPU / {requestedMemoryGb} GB.");
+            if (existingSameShape.Count + plannedCount > AppConfig.AlwaysFreeMaxInstancesPerShape ||
+                totalOcpus > AppConfig.AlwaysFreeA1OcpuCount ||
+                totalMemoryGb > AppConfig.AlwaysFreeA1MemoryGb)
+                throw new InvalidOperationException(
+                    $"Preflight stopped: existing tenancy A1 usage plus this plan exceeds the Always Free allowance " +
+                    $"({allowanceDescription}; at most {AppConfig.AlwaysFreeMaxInstancesPerShape} VMs). " +
+                    "Reduce instance count/OCPU/memory or remove existing A1 instances, including in other compartments.");
+        }
+        else if (existingSameShape.Count + plannedCount > AppConfig.AlwaysFreeMicroInstanceCount)
+        {
+            throw new InvalidOperationException(
+                $"Preflight stopped: the tenancy has {existingSameShape.Count} active {AppConfig.MicroShape} instance(s), " +
+                $"and this plan requests {plannedCount}; the tier limit is {AppConfig.AlwaysFreeMicroInstanceCount}. " +
+                "Remove an existing micro instance (including in another compartment) or reduce the target count.");
+        }
+
+        var totalStorageGb = usage.BootVolumeGb + usage.BlockVolumeGb + plannedBootGb;
+        if (totalStorageGb > AppConfig.AlwaysFreeBlockStorageGb)
+            throw new InvalidOperationException(
+                $"Preflight stopped: tenancy storage is {usage.BootVolumeGb + usage.BlockVolumeGb} GB and this plan " +
+                $"adds {plannedBootGb} GB, exceeding the {AppConfig.AlwaysFreeBlockStorageGb} GB combined boot/block-volume pool. " +
+                "Delete or resize existing volumes, or reduce the target count/boot size.");
+
+        AppendLog("✅ Existing tenancy usage leaves enough Always Free capacity for this plan.");
     }
 
     /// <summary>Picks the newest image, or the configured image_version match when one is set.</summary>
@@ -596,6 +637,7 @@ public partial class MainWindow : Window
     {
         var ct = _cts?.Token ?? CancellationToken.None;
         using var oci = CreateOciService();
+        await ValidateTenancyCapacityAsync(oci, ct);
         var images = await oci.ListImagesAsync(_config.CompartmentOcid, _config.ImageOs, _config.Shape, ct);
         if (images.Count == 0)
         {
@@ -609,6 +651,7 @@ public partial class MainWindow : Window
         var achieved = 0;
         for (var i = 1; i <= targetCount && !ct.IsCancellationRequested; i++)
         {
+            await ValidateTenancyCapacityAsync(oci, ct, targetCount - achieved);
             _status.State = HuntState.Hunting;
             _status.Attempts++;
             var ad = ads[(_status.Attempts - 1) % ads.Count];
@@ -664,6 +707,7 @@ public partial class MainWindow : Window
         try
         {
             using var oci = CreateOciService();
+            await ValidateTenancyCapacityAsync(oci, ct);
 
             var images = await oci.ListImagesAsync(
                 _config.CompartmentOcid, _config.ImageOs, _config.Shape, ct);
@@ -683,6 +727,7 @@ public partial class MainWindow : Window
                 _status.CurrentAd = ad;
                 AppendLog($"Attempt #{_status.Attempts} -> {ad}");
 
+                await ValidateTenancyCapacityAsync(oci, ct, targetCount - achievedCount);
                 var outcome = await AttemptLaunchAsync(oci, ad, image, ct);
                 if (outcome == AttemptOutcome.Success)
                 {
@@ -771,6 +816,7 @@ public partial class MainWindow : Window
         _status.Attempts++;
 
         using var oci = CreateOciService();
+        await ValidateTenancyCapacityAsync(oci, ct);
         Image image;
         string ad;
         try

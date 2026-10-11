@@ -1,0 +1,84 @@
+<Window x:Class="OracleHost.Windows.NetworkDiagnosticWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="OracleHost — Network Diagnostics"
+        Width="820" Height="700" MinWidth="640" MinHeight="520"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        Background="{StaticResource WindowBg}"
+        FontFamily="Segoe UI Variable Text" FontSize="14">
+    <Grid Margin="26,20,26,18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Margin="0,0,0,14">
+            <TextBlock Text="VM network diagnostics" FontSize="24" FontWeight="Bold"
+                       Foreground="{StaticResource TextPrimary}"/>
+            <TextBlock Text="Read-only inspection of the instance VNIC, subnet route table, and attached security rules."
+                       FontSize="13" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+        </StackPanel>
+        <Grid Grid.Row="1" Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0">
+                <TextBlock Text="Instance" Style="{StaticResource FieldLabel}"/>
+                <ComboBox x:Name="ComboInstances" Style="{StaticResource FieldCombo}"
+                          DisplayMemberPath="Label" SelectedValuePath="Id"/>
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+                <TextBlock Text="Your public IPv4 (optional)" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="TxtSshSourceIp" Style="{StaticResource FieldBox}"
+                         ToolTip="Used to check whether an attached security rule allows SSH from your location."/>
+            </StackPanel>
+            <Button x:Name="BtnRun" Grid.Column="4" Style="{StaticResource GhostButton}"
+                    Background="{StaticResource BlueGrad}" Content="Diagnose" Padding="18,8"
+                    VerticalAlignment="Bottom" Click="BtnRun_Click"/>
+        </Grid>
+        <Border Grid.Row="2" Style="{StaticResource GlassCard}" Padding="0" ClipToBounds="True">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16">
+                <StackPanel>
+                    <TextBlock x:Name="TxtSummary" Text="Choose an instance and run the read-only network check."
+                               Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    <ItemsControl x:Name="ItemsChecks">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border CornerRadius="10" Background="{StaticResource InputBg}"
+                                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                        Padding="12,10" Margin="0,0,0,8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="12"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0" CornerRadius="8" Padding="8,4" VerticalAlignment="Top"
+                                                Background="{Binding BadgeBackground}">
+                                            <TextBlock Text="{Binding State}" FontSize="11" FontWeight="Bold"
+                                                       Foreground="{Binding BadgeForeground}"/>
+                                        </Border>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextPrimary}"/>
+                                            <TextBlock Text="{Binding Detail}" TextWrapping="Wrap" Margin="0,3,0,0"
+                                                       Foreground="{StaticResource TextSecondary}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+        <Button Grid.Row="3" Style="{StaticResource ActionButton}"
+                Background="{StaticResource UtilityBg}" Content="Close"
+                Height="42" Margin="0,12,0,0" Click="BtnClose_Click"/>
+    </Grid>
+</Window>

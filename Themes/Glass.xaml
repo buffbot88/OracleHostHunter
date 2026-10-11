@@ -23,6 +23,10 @@
     <SolidColorBrush x:Key="GreenBrush" Color="#16C96B"/>
     <SolidColorBrush x:Key="RedBrush" Color="#E5484D"/>
 
+    <LinearGradientBrush x:Key="AccentGrad" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FF8A3D" Offset="0"/>
+        <GradientStop Color="#E95A12" Offset="1"/>
+    </LinearGradientBrush>
     <LinearGradientBrush x:Key="VioletGrad" StartPoint="0,0" EndPoint="0,1">
         <GradientStop Color="#6D55F6" Offset="0"/>
         <GradientStop Color="#4A32E3" Offset="1"/>
@@ -138,22 +142,99 @@
     </Style>
 
     <!-- Form inputs: apply explicitly with Style="{StaticResource FieldCombo/FieldBox}" -->
+    <!-- Full dark template: the stock ComboBox chrome paints itself with Windows
+         system colors (light blue highlight), which is unreadable on this theme. -->
     <Style x:Key="FieldCombo" TargetType="ComboBox">
         <Setter Property="Background" Value="{StaticResource InputBg}"/>
         <Setter Property="BorderBrush" Value="{StaticResource InputBorder}"/>
         <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
         <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Padding" Value="10,6"/>
         <Setter Property="FontSize" Value="14"/>
         <Setter Property="MinHeight" Value="40"/>
         <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="SnapsToDevicePixels" Value="True"/>
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="34"/>
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="Bd" Grid.ColumnSpan="2" CornerRadius="10"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"/>
+                        <ToggleButton x:Name="Toggler" Grid.ColumnSpan="2" Focusable="False"
+                                      ClickMode="Press" Background="Transparent" BorderThickness="0"
+                                      IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay,
+                                          RelativeSource={RelativeSource TemplatedParent}}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border Background="Transparent"/>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
+                        <ContentPresenter x:Name="ContentSite" Grid.Column="0" Margin="12,0,0,0"
+                                          VerticalAlignment="Center" IsHitTestVisible="False"
+                                          Content="{TemplateBinding SelectionBoxItem}"
+                                          ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                          ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"/>
+                        <Path Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"
+                              IsHitTestVisible="False" Data="M 0 0 L 5 5 L 10 0"
+                              Stroke="{StaticResource TextSecondary}" StrokeThickness="1.6"/>
+                        <Popup x:Name="DropDown" Placement="Bottom" Focusable="False"
+                               AllowsTransparency="True" PopupAnimation="Fade"
+                               IsOpen="{TemplateBinding IsDropDownOpen}"
+                               MinWidth="{TemplateBinding ActualWidth}"
+                               MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                            <Border CornerRadius="10" Background="#141C27"
+                                    BorderBrush="{StaticResource InputBorder}" BorderThickness="1"
+                                    Padding="4" Margin="0,4,0,0">
+                                <ScrollViewer SnapsToDevicePixels="True">
+                                    <StackPanel IsItemsHost="True"/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource FocusBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.5"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <Style TargetType="ComboBoxItem">
-        <Setter Property="Background" Value="#141C27"/>
+        <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-        <Setter Property="Padding" Value="10,7"/>
         <Setter Property="FontSize" Value="14"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBoxItem">
+                    <Border x:Name="Bd" CornerRadius="6" Background="Transparent" Padding="10,8">
+                        <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="#2E3B4E"/>
+                            <Setter Property="Foreground" Value="White"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="#333F52"/>
+                            <Setter Property="Foreground" Value="White"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <Style x:Key="FieldBox" TargetType="TextBox">

@@ -1,0 +1,118 @@
+<Window x:Class="OracleHost.Windows.OciGuideWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="OracleHost — OCI Setup Guide"
+        Width="900" Height="780" MinWidth="680" MinHeight="580"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip"
+        Background="{StaticResource WindowBg}"
+        FontFamily="Segoe UI Variable Text" FontSize="14">
+    <Grid Margin="28,20,28,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,14">
+            <TextBlock Text="OCI setup &amp; VM internet guide" FontSize="25" FontWeight="Bold"
+                       Foreground="{StaticResource TextPrimary}"/>
+            <TextBlock Text="Gather the right OCI identifiers, keep credentials safe, and configure a public subnet so your VM can reach the internet."
+                       FontSize="13.5" Foreground="{StaticResource TextSecondary}"
+                       TextWrapping="Wrap" Margin="0,5,0,0"/>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+            <StackPanel>
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="1 · Pick your OCI account and region"/>
+                        <TextBlock Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" LineHeight="20">
+                            Sign in at cloud.oracle.com. Use the tenancy and region where you want the VM. In the console, select the target region from the region menu, then open Identity &amp; Security → Compartments and choose an active compartment you can use. The tenancy OCID is available from tenancy details; your user OCID is under the profile menu → My profile; the compartment OCID is on that compartment’s details page. Copy the complete OCIDs, not their display names. Use the region identifier (for example, us-ashburn-1; OracleHost also accepts IAD for Ashburn).
+                        </TextBlock>
+                        <TextBlock Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,8,0,0">
+                            OracleHost scans resources in the configured region and compartments the API user can see. Put the chosen compartment OCID and the subnet OCID into AccountInfo/information.md. Ask your OCI administrator for access if a compartment is missing.
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="2 · Create an API signing key for OracleHost"/>
+                        <TextBlock Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" LineHeight="20">
+                            Open your profile menu → My profile → API keys → Add API key. Generate a key pair or upload your own public PEM. Download/save the private PEM immediately and keep it private. OCI displays the fingerprint after adding the public key. Use the matching private PEM for OracleHost’s API access; this is separate from the SSH key used to log into the VM. Never email, commit, or share the private key.
+                        </TextBlock>
+                        <TextBlock Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,8,0,0">
+                            The OCI user also needs IAM policy permission to inspect the selected tenancy resources and manage instances, networking attachments, and boot volumes in the target compartment. If preflight reports NotAuthorized, ask the tenancy administrator to grant the required access.
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="3 · Create a VCN and internet-enabled subnet"/>
+                        <TextBlock Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" LineHeight="20">
+                            In Networking → Virtual cloud networks, create a VCN in the same region and compartment as the VM. Use the VCN wizard option that creates internet connectivity, or create the parts below yourself:
+                        </TextBlock>
+                        <TextBlock Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" Margin="0,8,0,0" LineHeight="20">
+                            • Create a regional public subnet with a CIDR inside the VCN’s CIDR range; allow public IPv4 addresses.
+                            • Create and enable an Internet Gateway for the VCN.
+                            • In the route table attached to the subnet, add destination 0.0.0.0/0 → that Internet Gateway.
+                            • In the subnet’s security list, permit only the inbound ports you need. For SSH, add stateful TCP 22 from your own public IP with /32 (recommended), not the entire internet. Keep the default stateful egress rule to 0.0.0.0/0 so new outbound connections and their replies are allowed.
+                            • Create/choose the subnet in the same compartment used by OracleHost and copy its subnet OCID. Put VMs that should communicate privately in the same VCN; the VCN’s private routing lets them reach each other without public IPs, while its gateway route is shared for internet egress.
+                        </TextBlock>
+                        <Border CornerRadius="10" Background="#30251A" BorderBrush="#6A4B26" BorderThickness="1"
+                                Padding="12,10" Margin="0,10,0,0">
+                            <TextBlock Foreground="#F3D7A3" TextWrapping="Wrap">
+                                Public subnet + Internet Gateway route + public IP assignment are all needed for direct internet reachability. Opening SSH ingress alone does not provide outbound internet access. Do not expose SSH (or other admin ports) to 0.0.0.0/0 unless you knowingly accept the risk.
+                            </TextBlock>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="4 · Fill in AccountInfo and launch"/>
+                        <TextBlock Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" LineHeight="20">
+                            Beside OracleHost.exe (or the project root), create AccountInfo. Copy information.example.md to information.md and fill in Tenancy OCID, Home region, User OCID, Compartment OCID, and Subnet OCID—each label on its own line and its value on the next. Put exactly one OCI API private .pem beside it; its name must not contain “public”. Do not put secrets in the example file or share the completed folder. OracleHost creates or reuses a separate SSH key under your user profile and installs its public half on newly launched VMs.
+                        </TextBlock>
+                        <TextBlock Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" Margin="0,8,0,0" LineHeight="20">
+                            Open Settings to choose shape, size, boot storage, and count. Run Check setup first, then Try once or Start Hunting. On success, use the shown public IP and SSH command (Oracle Linux username is usually opc). From Windows Terminal, use the displayed command `ssh opc@&lt;PUBLIC_IP&gt;` (or specify `-i` and your SSH private-key path if needed). Accept the host key only after checking that this is your instance.
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="5 · If the VM has no internet"/>
+                        <TextBlock Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" LineHeight="20">
+                            Check each hop: instance is Running; its VNIC is in the intended public subnet; the VNIC has an ephemeral public IPv4 address; subnet route table has 0.0.0.0/0 to an enabled Internet Gateway; and subnet security rules allow stateful egress to 0.0.0.0/0. On the VM, test DNS (getent hosts oracle.com) and HTTPS (curl -I https://oracle.com). If IP connectivity works but DNS fails, review the VCN DHCP options and DNS resolver settings. If SSH alone fails, check TCP 22 ingress from your current public IP and the VM firewall.
+                        </TextBlock>
+                        <TextBlock Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" Margin="0,8,0,0" LineHeight="20">
+                            Private subnet alternative: do not assign a public IP; create a NAT Gateway and route 0.0.0.0/0 to it for outbound-only internet. You will need a bastion, VPN, or other private access path to administer a VM in that subnet. A public IP is ephemeral in OracleHost; it is not a reserved address.
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Official OCI references"/>
+                        <TextBlock TextWrapping="Wrap" Margin="0,5,0,0">
+                            <Hyperlink NavigateUri="https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/scenarioa.htm" RequestNavigate="GuideLink_RequestNavigate">Public subnet, Internet Gateway, route table, and security rules</Hyperlink>
+                        </TextBlock>
+                        <TextBlock TextWrapping="Wrap" Margin="0,5,0,0">
+                            <Hyperlink NavigateUri="https://docs.oracle.com/iaas/Content/Identity/Tasks/managingcredentials.htm" RequestNavigate="GuideLink_RequestNavigate">Manage OCI API signing keys</Hyperlink>
+                        </TextBlock>
+                        <TextBlock TextWrapping="Wrap" Margin="0,5,0,0">
+                            <Hyperlink NavigateUri="https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/managingroutetables_topic-working.htm" RequestNavigate="GuideLink_RequestNavigate">VCN route tables and NAT Gateway routing</Hyperlink>
+                        </TextBlock>
+                        <TextBlock Text="OCI console labels can change. Follow the linked Oracle documentation if a menu differs; always review your security rules before saving." Foreground="{StaticResource TextMuted}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Button Grid.Row="2" Style="{StaticResource ActionButton}"
+                Background="{StaticResource UtilityBg}" Content="Close"
+                Height="44" Margin="0,12,0,0" Click="BtnClose_Click"/>
+    </Grid>
+</Window>
