@@ -21,6 +21,7 @@ jobs:
           dotnet-version: "8.0.x"
 
       - name: Verify tag matches project version
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           set -euo pipefail
@@ -49,6 +50,7 @@ jobs:
           echo "ZIP_NAME=$zip" >> $env:GITHUB_ENV
 
       - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
