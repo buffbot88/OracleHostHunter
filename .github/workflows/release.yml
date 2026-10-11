@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Verify tag matches project version
+        shell: bash
+        run: |
+          set -euo pipefail
+          project_version=$(grep -oP '<Version>\K[^<]+' OracleHost.csproj)
+          tag="${GITHUB_REF_NAME#v}"
+          echo "Tag: $GITHUB_REF_NAME  Project version: $project_version"
+          if [ "$tag" != "$project_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match OracleHost.csproj version $project_version"
+            exit 1
+          fi
+
+      - name: Restore
+        run: dotnet restore OracleHost.csproj
+
+      - name: Build (Release)
+        run: dotnet build OracleHost.csproj -c Release --no-restore
+
+      - name: Publish win-x64 (framework-dependent)
+        run: dotnet publish OracleHost.csproj -c Release -r win-x64 --self-contained false -o publish
+
+      - name: Package zip (no AccountInfo or config files)
+        shell: pwsh
+        run: |
+          $zip = "OracleHost-$env:GITHUB_REF_NAME-win-x64.zip"
+          Compress-Archive -Path "publish/*" -DestinationPath $zip
+          echo "ZIP_NAME=$zip" >> $env:GITHUB_ENV
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" 'index($0, "## " v " ") == 1 {f=1; next} /^## /{f=0} f' CHANGELOG.md > release-notes.md
+          gh release create "$GITHUB_REF_NAME" "$ZIP_NAME" \
+            --title "OracleHost $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag

@@ -3,46 +3,93 @@
 
     <!-- OracleHost glass theme: dark surfaces, orange brand, soft cards -->
 
-    <SolidColorBrush x:Key="WindowBg" Color="#0B0E13"/>
-    <SolidColorBrush x:Key="CardBg" Color="#171D26"/>
-    <SolidColorBrush x:Key="ConsoleBg" Color="#080D13"/>
-    <SolidColorBrush x:Key="ChipBg" Color="#1E2530"/>
-    <SolidColorBrush x:Key="BorderBrush" Color="#33FFFFFF"/>
+    <SolidColorBrush x:Key="WindowBg" Color="#0C1016"/>
+    <SolidColorBrush x:Key="CardBg" Color="#151C26"/>
+    <SolidColorBrush x:Key="ConsoleBg" Color="#090E14"/>
+    <SolidColorBrush x:Key="ChipBg" Color="#1C2532"/>
+    <SolidColorBrush x:Key="BorderBrush" Color="#2A3648"/>
+    <SolidColorBrush x:Key="InputBg" Color="#101722"/>
+    <SolidColorBrush x:Key="InputBorder" Color="#2B3A4F"/>
+    <SolidColorBrush x:Key="FocusBrush" Color="#FF7A2E"/>
     <SolidColorBrush x:Key="AccentBrush" Color="#FF681E"/>
     <SolidColorBrush x:Key="TextPrimary" Color="#F3F5F8"/>
-    <SolidColorBrush x:Key="TextSecondary" Color="#9DA8BA"/>
-    <SolidColorBrush x:Key="TextMuted" Color="#737F91"/>
+    <SolidColorBrush x:Key="TextSecondary" Color="#A7B3C5"/>
+    <SolidColorBrush x:Key="TextMuted" Color="#7B8798"/>
     <SolidColorBrush x:Key="SuccessBrush" Color="#27D76C"/>
     <SolidColorBrush x:Key="WarningBrush" Color="#FFB52D"/>
     <SolidColorBrush x:Key="DangerBrush" Color="#EE4343"/>
-    <SolidColorBrush x:Key="VioletBrush" Color="#5A41F4"/>
-    <SolidColorBrush x:Key="BlueBrush" Color="#1787F7"/>
+    <SolidColorBrush x:Key="VioletBrush" Color="#7C63F5"/>
+    <SolidColorBrush x:Key="BlueBrush" Color="#2E9BF6"/>
     <SolidColorBrush x:Key="GreenBrush" Color="#16C96B"/>
     <SolidColorBrush x:Key="RedBrush" Color="#E5484D"/>
 
     <LinearGradientBrush x:Key="VioletGrad" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#5A41F4" Offset="0"/>
-        <GradientStop Color="#4930E8" Offset="1"/>
+        <GradientStop Color="#6D55F6" Offset="0"/>
+        <GradientStop Color="#4A32E3" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="BlueGrad" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#1787F7" Offset="0"/>
-        <GradientStop Color="#0871E7" Offset="1"/>
+        <GradientStop Color="#2E9BF6" Offset="0"/>
+        <GradientStop Color="#0B70D8" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="GreenGrad" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#16C96B" Offset="0"/>
-        <GradientStop Color="#099A50" Offset="1"/>
+        <GradientStop Color="#1BD273" Offset="0"/>
+        <GradientStop Color="#0A9650" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="RedGrad" StartPoint="0,0" EndPoint="0,1">
         <GradientStop Color="#F04444" Offset="0"/>
         <GradientStop Color="#C82929" Offset="1"/>
     </LinearGradientBrush>
 
+    <!-- Cards & sections -->
     <Style x:Key="GlassCard" TargetType="Border">
         <Setter Property="Background" Value="{StaticResource CardBg}"/>
         <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="18"/>
+        <Setter Property="Padding" Value="22"/>
+    </Style>
+
+    <Style x:Key="SectionCard" TargetType="Border" BasedOn="{StaticResource GlassCard}">
+        <Setter Property="Padding" Value="20"/>
+        <Setter Property="Margin" Value="0,0,0,14"/>
+    </Style>
+
+    <Style x:Key="SectionTitle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+        <Setter Property="FontSize" Value="15"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Margin" Value="0,0,0,2"/>
+    </Style>
+
+    <Style x:Key="FieldLabel" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+
+    <Style x:Key="HintText" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+        <Setter Property="FontSize" Value="12.5"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+        <Setter Property="Margin" Value="0,6,0,0"/>
+    </Style>
+
+    <Style x:Key="Chip" TargetType="Border">
+        <Setter Property="Background" Value="{StaticResource ChipBg}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="CornerRadius" Value="16"/>
-        <Setter Property="Padding" Value="18"/>
+        <Setter Property="Padding" Value="12,7"/>
+    </Style>
+
+    <Style x:Key="NumberBadge" TargetType="Border">
+        <Setter Property="Width" Value="26"/>
+        <Setter Property="Height" Value="26"/>
+        <Setter Property="CornerRadius" Value="13"/>
+        <Setter Property="Background" Value="#28FFFFFF"/>
+        <Setter Property="BorderBrush" Value="#44FFFFFF"/>
+        <Setter Property="BorderThickness" Value="1"/>
     </Style>
 
     <!-- Primary gradient action buttons -->
@@ -55,18 +102,21 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="bd" CornerRadius="14" Background="{TemplateBinding Background}"
-                            BorderBrush="#44FFFFFF" BorderThickness="1" Padding="14,12">
+                            BorderBrush="#4DFFFFFF" BorderThickness="1" Padding="14,12">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="bd" Property="Opacity" Value="0.88"/>
+                            <Setter TargetName="bd" Property="Opacity" Value="0.9"/>
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
                             <Setter TargetName="bd" Property="Opacity" Value="0.72"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource FocusBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -79,6 +129,93 @@
         <Setter Property="FontSize" Value="13.5"/>
         <Setter Property="FontWeight" Value="SemiBold"/>
     </Style>
-    <SolidColorBrush x:Key="UtilityBg" Color="#1B222D"/>
+    <SolidColorBrush x:Key="UtilityBg" Color="#1B2431"/>
+
+    <!-- Compact ghost button for header / secondary actions -->
+    <Style x:Key="GhostButton" TargetType="Button" BasedOn="{StaticResource ActionButton}">
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+
+    <!-- Form inputs: apply explicitly with Style="{StaticResource FieldCombo/FieldBox}" -->
+    <Style x:Key="FieldCombo" TargetType="ComboBox">
+        <Setter Property="Background" Value="{StaticResource InputBg}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource InputBorder}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="10,6"/>
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="MinHeight" Value="40"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+
+    <Style TargetType="ComboBoxItem">
+        <Setter Property="Background" Value="#141C27"/>
+        <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+        <Setter Property="Padding" Value="10,7"/>
+        <Setter Property="FontSize" Value="14"/>
+    </Style>
+
+    <Style x:Key="FieldBox" TargetType="TextBox">
+        <Setter Property="Background" Value="{StaticResource InputBg}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource InputBorder}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+        <Setter Property="CaretBrush" Value="{StaticResource TextPrimary}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="10,0,0,0"/>
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="MinHeight" Value="40"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border x:Name="bd" CornerRadius="10"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            Padding="{TemplateBinding Padding}">
+                        <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource FocusBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="bd" Property="Opacity" Value="0.5"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Slim dark sliders -->
+    <Style TargetType="Slider">
+        <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Height" Value="28"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- Rounded progress bar (used by the hunt progress) -->
+    <Style TargetType="ProgressBar">
+        <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+        <Setter Property="Background" Value="#1E2632"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Height" Value="8"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Border CornerRadius="4" Background="{TemplateBinding Background}">
+                        <Grid>
+                            <Rectangle x:Name="PART_Track" Visibility="Collapsed"/>
+                            <Border x:Name="PART_Indicator" CornerRadius="4" HorizontalAlignment="Left"
+                                    Background="{TemplateBinding Foreground}" Width="0"/>
+                        </Grid>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 
 </ResourceDictionary>

@@ -222,7 +222,7 @@ public class OciService : IDisposable
         {
             AvailabilityDomain = availabilityDomain,
             CompartmentId = config.CompartmentOcid,
-            DisplayName = config.DisplayName,
+            DisplayName = config.InstanceDisplayName(1),
             Shape = config.Shape,
             SourceDetails = sourceDetails,
             SubnetId = config.SubnetOcid,

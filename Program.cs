@@ -1,8 +1,8 @@
-using OracleHost.Windows;
+using System.IO;
 using OracleHost.Helpers;
 using OracleHost.Models;
 using OracleHost.Services;
-using System.IO;
+using OracleHost.Windows;
 
 namespace OracleHost;
 
@@ -59,6 +59,15 @@ internal static class Program
                 }
             }
 
+            // Build the effective per-instance plan from the shared template so
+            // downstream code can reason about multi-instance goals without
+            // re-deriving them from DesiredInstanceCount + DisplayNameBase.
+            //
+            // This is informational only: launch and hunt still use the shared
+            // template directly and create instances one at a time.
+            var plan = BuildEffectiveInstancePlan(config);
+            DiagnosticLog.Info("Startup", $"Shared template will create up to {plan.Count} instance(s): {string.Join(", ", plan.Select(p => p.DisplayName))}.");
+
             var accountInfoComplete = adoptedAccountInfo &&
                 !string.IsNullOrWhiteSpace(config.CompartmentOcid) &&
                 !string.IsNullOrWhiteSpace(config.SubnetOcid);
@@ -83,6 +92,27 @@ internal static class Program
                 $"OracleHost could not start.\n\n{DiagnosticLog.Redact(ex.Message)}\n\nDetailed diagnostics were saved to:\n{DiagnosticLog.LogPath}",
                 "OracleHost Startup Error", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
         }
+    }
+
+    /// <summary>
+    /// Builds the planned instance list for the current shared template, after
+    /// clamping the desired count to what the Always Free pools support. Used
+    /// for logging/telemetry only; the actual launch loop uses
+    /// <see cref="AppConfig.EffectiveInstanceCount"/> and
+    /// <see cref="AppConfig.InstanceDisplayName(int)"/>.
+    /// </summary>
+    private static IReadOnlyList<(string DisplayName, string Shape, int? Ocpus, int? MemoryInGbs, int BootVolumeSizeGb)> BuildEffectiveInstancePlan(AppConfig config)
+    {
+        var count = config.EffectiveInstanceCount;
+        if (count <= 0) return Array.Empty<(string, string, int?, int?, int)>();
+
+        return Enumerable.Range(1, count).Select(i => (
+            config.InstanceDisplayName(i),
+            config.Shape,
+            config.IsFlexibleShape ? config.Ocpus : null,
+            config.IsFlexibleShape ? config.MemoryInGbs : null,
+            config.BootVolumeSizeGb ?? AppConfig.AlwaysFreeBootVolumeSizeGb
+        )).ToList();
     }
 
     private static void RegisterGlobalExceptionHandlers(System.Windows.Application app)
@@ -214,13 +244,15 @@ internal static class Program
         accountInfo.MemoryInGbs = config.MemoryInGbs;
         accountInfo.ImageOs = config.ImageOs;
         accountInfo.ImageVersion = config.ImageVersion;
-        accountInfo.DisplayName = config.DisplayName;
+        accountInfo.DisplayNameBase = config.DisplayNameBase;
+        accountInfo.DesiredInstanceCount = config.DesiredInstanceCount;
         accountInfo.AssignPublicIp = config.AssignPublicIp;
         accountInfo.MinIntervalSeconds = config.MinIntervalSeconds;
         accountInfo.MaxIntervalSeconds = config.MaxIntervalSeconds;
         accountInfo.StopOnLimit = config.StopOnLimit;
         accountInfo.MaxAttempts = config.MaxAttempts;
         accountInfo.AllowExisting = config.AllowExisting;
+        accountInfo.HasSeenOnboarding = config.HasSeenOnboarding;
         accountInfo.SshPublicKeyPath = config.SshPublicKeyPath;
         accountInfo.OciConfigPath = config.OciConfigPath;
         accountInfo.BootVolumeSizeGb = config.BootVolumeSizeGb;
@@ -268,7 +300,7 @@ internal static class Program
         else
             message += "\n\nFix the AccountInfo bundle or the saved configuration and restart.";
         DiagnosticLog.Warn("Startup", $"Configuration validation failed: {string.Join(" | ", problems)}");
-        System.Windows.MessageBox.Show(message + $"\n\nDetailed diagnostics: {DiagnosticLog.LogPath}", "OracleHost - Configuration Error",
+        System.Windows.MessageBox.Show(message + $"\\n\\nDetailed diagnostics: {DiagnosticLog.LogPath}", "OracleHost - Configuration Error",
             System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
         return false;
     }

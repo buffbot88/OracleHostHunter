@@ -88,3 +88,37 @@ No test or lint infrastructure exists in this repo.
   → retry; `LimitExceeded`, invalid params, auth errors → abort immediately.
   `ErrorClassifier` reads the typed `Oci.Common.Model.OciException`
   (`ServiceCode`/`StatusCode`) — no reflection.
+- Multi-server hunting: when `DesiredInstanceCount > 1`, the dashboard still
+  runs one launch at a time. On success it reports each instance as it reaches
+  `RUNNING`, then backs off before the next attempt until the shared template
+  has created `EffectiveInstanceCount` instances or the hunt is stopped/aborted.
+  `Try Once` runs the same shared-template loop once and reports how many were
+  created; `Start Hunting` keeps retrying until the target count is reached.
+  The success alarm and success panel still fire on each created instance.
+- Always Free resource math (source of truth for multi-server config):
+  - Arm Ampere A1 Compute: up to 2 OCPU / 12 GB per month (1,500 OCPU hours + 9,000 GB hours/month), flexible sizing, can be split across one or two VMs (down from 4 OCPU / 24 GB).
+  - AMD (E2.1.Micro): 2 micro instances, each 1/8 OCPU / 1 GB.
+  - Block and boot volumes: 200 GB total, 50 GB minimum per boot volume, so the practical ceiling is 4 VMs at the minimum size. Up to 5 volume backups at any time.
+  - Object Storage: 20 GB combined across Standard/Infrequent Access/Archive.
+  - Networking: up to 2 VCNs, 10 TB outbound/month, 50 IPSec VPN connections,
+    10 GB/month VCN flow logs.
+  - Databases & developer services: up to 2 Always Free Autonomous AI Databases; NoSQL up to 133M reads/writes per month, 3 tables x 25 GB each; MySQL HeatWave: 1 standalone system with 50 GB storage + 50 GB backup.
+  - Idle reclamation still applies: Oracle may stop/terminate instances that
+    stay idle (95th-percentile CPU/network/memory below 20% for 7 straight days).
+- Multi-server hunting: when `DesiredInstanceCount > 1`, the dashboard still
+  runs one launch at a time. On success it reports each instance as it reaches
+  `RUNNING`, then backs off before the next attempt until the shared template
+  has created `EffectiveInstanceCount` instances or the hunt is stopped/aborted.
+  `Try Once` runs the same shared-template loop once and reports how many were
+  created; `Start Hunting` keeps retrying until the target count is reached.
+  The success alarm and success panel still fire on each created instance.
+- Always Free resource math (source of truth for multi-server config):
+  - Arm Ampere A1 Compute: up to 2 OCPU / 12 GB per month (1,500 OCPU hours + 9,000 GB hours/month), flexible sizing, can be split across one or two VMs (down from 4 OCPU / 24 GB).
+  - AMD (E2.1.Micro): 2 micro instances, each 1/8 OCPU / 1 GB.
+  - Block and boot volumes: 200 GB total, 50 GB minimum per boot volume, so the practical ceiling is 4 VMs at the minimum size. Up to 5 volume backups at any time.
+  - Object Storage: 20 GB combined across Standard/Infrequent Access/Archive.
+  - Networking: up to 2 VCNs, 10 TB outbound/month, 50 IPSec VPN connections,
+    10 GB/month VCN flow logs.
+  - Databases & developer services: up to 2 Always Free Autonomous AI Databases; NoSQL up to 133M reads/writes per month, 3 tables x 25 GB each; MySQL HeatWave: 1 standalone system with 50 GB storage + 50 GB backup.
+  - Idle reclamation still applies: Oracle may stop/terminate instances that
+    stay idle (95th-percentile CPU/network/memory below 20% for 7 straight days).

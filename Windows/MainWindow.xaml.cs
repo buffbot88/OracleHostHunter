@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Media;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Media;
 using System.Windows.Threading;
 using WinForms = System.Windows.Forms;
 using Oci.CoreService.Models;
@@ -27,6 +29,17 @@ public partial class MainWindow : Window
     private bool _operationRunning;
     private bool _startupPreflightPending;
     private bool _trayHintShown;
+    private int _tourStep;
+
+    private static readonly (string Title, string Body)[] TourSteps =
+    {
+        ("1 · Check setup",
+         "Start here. Check setup confirms your credentials, finds your Always Free limit, and looks for existing instances. It never creates anything."),
+        ("2 · Try once",
+         "Try once makes a single launch attempt so you can see whether Oracle has capacity right now. It stops after one try."),
+        ("3 · Start hunting",
+         "Start hunting retries in the background with randomized pauses until a server is running. Keep the window open or minimize it to the tray; an alarm sounds on success. Press Stop anytime.")
+    };
     private readonly DispatcherTimer _uiTimer = new();
     private WinForms.NotifyIcon? _trayIcon;
 
@@ -48,6 +61,7 @@ public partial class MainWindow : Window
         SourceInitialized += (_, _) => EnableDarkTitleBar();
         StateChanged += (_, _) => HandleMinimizeToTray();
         Closing += (_, e) => OnWindowClosing(e);
+        SizeChanged += (_, _) => PositionTour();
     }
 
     // --- Dark title bar (Win11/10) ---
@@ -139,6 +153,94 @@ public partial class MainWindow : Window
         TxtLog.ScrollToEnd();
         DiagnosticLog.Info("Dashboard", message);
     }
+
+    // --- First-run walkthrough ---
+    private void ShowTour(int step)
+    {
+        _tourStep = Math.Clamp(step, 0, TourSteps.Length - 1);
+        var (title, body) = TourSteps[_tourStep];
+        TxtTourCount.Text = $"STEP {_tourStep + 1} OF {TourSteps.Length}";
+        TxtTourTitle.Text = title;
+        TxtTourBody.Text = body;
+        BtnTourBack.IsEnabled = _tourStep > 0;
+        BtnTourNext.Content = _tourStep == TourSteps.Length - 1 ? "Got it" : "Next";
+        TourOverlay.Visibility = Visibility.Visible;
+        PositionTour();
+    }
+
+    /// <summary>The real button each walkthrough step describes.</summary>
+    private Button TourTarget(int step) => step switch
+    {
+        0 => BtnPreflight,
+        1 => BtnOnce,
+        _ => BtnStart
+    };
+
+    /// <summary>
+    /// Cuts a rounded spotlight hole over the current step's button, draws a ring
+    /// around it, and places the explanation card above it (or below when there is
+    /// no room above). Called on show and whenever the window is resized.
+    /// </summary>
+    private void PositionTour()
+    {
+        if (TourOverlay.Visibility != Visibility.Visible) return;
+        UpdateLayout();
+
+        var target = TourTarget(_tourStep);
+        var bounds = target.TransformToVisual(TourOverlay)
+            .TransformBounds(new Rect(0, 0, target.ActualWidth, target.ActualHeight));
+        const double pad = 8;
+        var hole = new Rect(bounds.X - pad, bounds.Y - pad, bounds.Width + pad * 2, bounds.Height + pad * 2);
+
+        var overlayW = TourOverlay.ActualWidth;
+        var overlayH = TourOverlay.ActualHeight;
+        TourDim.Data = Geometry.Combine(
+            new RectangleGeometry(new Rect(0, 0, overlayW, overlayH)),
+            new RectangleGeometry(hole, 16, 16),
+            GeometryCombineMode.Exclude, null);
+
+        TourRing.Width = hole.Width;
+        TourRing.Height = hole.Height;
+        TourRing.Margin = new Thickness(hole.X, hole.Y, 0, 0);
+
+        const double edge = 16;
+        var cardW = TourCard.ActualWidth;
+        var cardH = TourCard.ActualHeight;
+        var x = Math.Clamp(hole.X + hole.Width / 2 - cardW / 2, edge, Math.Max(edge, overlayW - cardW - edge));
+        var y = hole.Y - cardH - edge;
+        if (y < edge) y = hole.Bottom + edge;
+        y = Math.Clamp(y, edge, Math.Max(edge, overlayH - cardH - edge));
+        TourCard.Margin = new Thickness(x, y, 0, 0);
+    }
+
+    private void CloseTour()
+    {
+        TourOverlay.Visibility = Visibility.Collapsed;
+        if (_config.HasSeenOnboarding) return;
+
+        _config.HasSeenOnboarding = true;
+        try
+        {
+            ConfigService.Save(_config);
+        }
+        catch (Exception ex)
+        {
+            // The tour simply reappears next launch if the flag cannot be saved.
+            DiagnosticLog.Exception("Onboarding", "Save first-run flag", ex);
+        }
+    }
+
+    private void BtnTour_Click(object sender, RoutedEventArgs e) => ShowTour(0);
+
+    private void BtnTourNext_Click(object sender, RoutedEventArgs e)
+    {
+        if (_tourStep < TourSteps.Length - 1) ShowTour(_tourStep + 1);
+        else CloseTour();
+    }
+
+    private void BtnTourBack_Click(object sender, RoutedEventArgs e) => ShowTour(_tourStep - 1);
+
+    private void BtnTourSkip_Click(object sender, RoutedEventArgs e) => CloseTour();
 
     // --- Buttons ---
     private void BtnOpenLogs_Click(object sender, RoutedEventArgs e)
@@ -264,6 +366,7 @@ public partial class MainWindow : Window
     protected override void OnContentRendered(EventArgs e)
     {
         base.OnContentRendered(e);
+        if (!_config.HasSeenOnboarding) ShowTour(0);
         if (!_startupPreflightPending) return;
         _startupPreflightPending = false;
         _ = RunPreflightAsync(true);
@@ -415,8 +518,21 @@ public partial class MainWindow : Window
         _status.StartTime = DateTime.UtcNow;
         _status.NextRetryIn = 0;
         UpdateStatusDisplay();
-        AppendLog("Attempting single instance launch...");
 
+        var targetCount = _config.EffectiveInstanceCount;
+        if (targetCount <= 1)
+        {
+            AppendLog($"Attempting single instance launch...");
+            await RunSingleAttemptFlowAsync();
+            return;
+        }
+
+        AppendLog($"Attempting up to {targetCount} instance(s) using the shared template...");
+        await RunMultiAttemptOnceFlowAsync(targetCount);
+    }
+
+    private async Task RunSingleAttemptFlowAsync()
+    {
         try
         {
             var result = await RunOneAttemptAsync(_cts.Token);
@@ -444,6 +560,80 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task RunMultiAttemptOnceFlowAsync(int targetCount)
+    {
+        try
+        {
+            var achieved = await RunMultiAttemptCoreAsync(targetCount, oneShot: true);
+            var summary = achieved == 0
+                ? "No instance was created."
+                : achieved < targetCount
+                    ? $"Created {achieved} of {targetCount} target instance(s); the rest were not reached."
+                    : $"Created {achieved} of {targetCount} target instance(s).";
+            AppendLog($"✔ {summary}");
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Exception("TryOnce", "Multi-instance single-run flow", ex);
+            AppendLog($"❌ Error: {DiagnosticLog.Redact(ex.Message)}\nDetails: {DiagnosticLog.LogPath}");
+        }
+        finally
+        {
+            _operationRunning = false;
+            if (_status.State == HuntState.Hunting)
+                _status.State = HuntState.Idle;
+            UpdateStatusDisplay();
+        }
+    }
+
+    /// <summary>
+    /// Shared-template "try once" loop: attempts up to <paramref name="targetCount"/>
+    /// launches sequentially without retrying capacity failures. Returns how many
+    /// instances reached RUNNING. Capacity/abort outcomes stop the pass so a
+    /// single Try Once click never turns into an unbounded hunt.
+    /// </summary>
+    private async Task<int> RunMultiAttemptCoreAsync(int targetCount, bool oneShot)
+    {
+        var ct = _cts?.Token ?? CancellationToken.None;
+        using var oci = CreateOciService();
+        var images = await oci.ListImagesAsync(_config.CompartmentOcid, _config.ImageOs, _config.Shape, ct);
+        if (images.Count == 0)
+        {
+            AppendLog($"ERROR: No {_config.ImageOs} images found for shape {_config.Shape}");
+            _status.State = HuntState.Aborted;
+            return 0;
+        }
+        var image = SelectImage(images);
+        _status.ImageName = image.DisplayName ?? image.Id;
+        var ads = await ResolveShapeAvailabilityDomainsAsync(oci, ct);
+        var achieved = 0;
+        for (var i = 1; i <= targetCount && !ct.IsCancellationRequested; i++)
+        {
+            _status.State = HuntState.Hunting;
+            _status.Attempts++;
+            var ad = ads[(_status.Attempts - 1) % ads.Count];
+            _status.CurrentAd = ad;
+            AppendLog($"Attempt #{_status.Attempts} -> {ad} (instance {i} of {targetCount})");
+            var outcome = await AttemptLaunchAsync(oci, ad, image, ct);
+            if (outcome == AttemptOutcome.Success)
+            {
+                achieved++;
+                AppendLog($"✅ Instance #{achieved} RUNNING - IP: {_status.PublicIp}");
+                NotifyInstanceSuccess();
+                continue;
+            }
+            if (outcome == AttemptOutcome.Abort)
+            {
+                AppendLog($"❌ Aborted: {_status.LastError}");
+                break;
+            }
+            AppendLog($"⚠ Capacity not available: {_status.LastError}");
+            if (oneShot)
+                break;
+        }
+        return achieved;
+    }
+
     // --- Continuous hunting (toggle: Start ⇄ Stop) ---
     private async void BtnStart_Click(object sender, RoutedEventArgs e)
     {
@@ -464,7 +654,12 @@ public partial class MainWindow : Window
         _status.State = HuntState.Hunting;
         _status.StartTime = DateTime.UtcNow;
         Progress.Visibility = Visibility.Visible;
-        AppendLog("🎯 Starting continuous hunt...");
+
+        var targetCount = _config.EffectiveInstanceCount;
+        AppendLog(targetCount <= 1
+            ? "🎯 Starting continuous hunt for one instance..."
+            : $"🎯 Starting continuous hunt for up to {targetCount} instance(s) using the shared template...");
+
 
         try
         {
@@ -479,7 +674,8 @@ public partial class MainWindow : Window
             var ads = await ResolveShapeAvailabilityDomainsAsync(oci, ct);
             AppendLog($"Hunting across {ads.Count} availability domain(s): {string.Join(", ", ads)}");
 
-            while (!ct.IsCancellationRequested)
+            var achievedCount = 0;
+            while (!ct.IsCancellationRequested && achievedCount < targetCount)
             {
                 _status.NextRetryIn = 0;
                 _status.Attempts++;
@@ -490,10 +686,25 @@ public partial class MainWindow : Window
                 var outcome = await AttemptLaunchAsync(oci, ad, image, ct);
                 if (outcome == AttemptOutcome.Success)
                 {
-                    AppendLog($"🎉 Instance RUNNING - IP: {_status.PublicIp}");
+                    achievedCount++;
+                    AppendLog($"✅ Instance #{achievedCount} RUNNING - IP: {_status.PublicIp}");
                     NotifyInstanceSuccess();
-                    Progress.Visibility = Visibility.Collapsed;
-                    return;
+
+                    if (achievedCount >= targetCount)
+                    {
+                        AppendLog($"🎉 Wanted {targetCount} instance(s); {achievedCount} are running.");
+                        Progress.Visibility = Visibility.Collapsed;
+                        return;
+                    }
+
+                    AppendLog($"Backing off before the next instance...");
+                    var delay = Random.Shared.Next(_config.MinIntervalSeconds, _config.MaxIntervalSeconds + 1);
+                    for (int i = delay; i > 0 && !ct.IsCancellationRequested; i--)
+                    {
+                        _status.NextRetryIn = i;
+                        await Task.Delay(1000, ct);
+                    }
+                    continue;
                 }
                 if (outcome == AttemptOutcome.Abort)
                 {
@@ -511,9 +722,9 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                var delay = Random.Shared.Next(_config.MinIntervalSeconds, _config.MaxIntervalSeconds + 1);
-                AppendLog($"⏳ Oracle capacity unavailable — retrying in {delay}s across the availability domains.");
-                for (int i = delay; i > 0 && !ct.IsCancellationRequested; i--)
+                var retryDelay = Random.Shared.Next(_config.MinIntervalSeconds, _config.MaxIntervalSeconds + 1);
+                AppendLog($"⏳ Oracle capacity unavailable — retrying in {retryDelay}s across the availability domains.");
+                for (int i = retryDelay; i > 0 && !ct.IsCancellationRequested; i--)
                 {
                     _status.NextRetryIn = i;
                     await Task.Delay(1000, ct);

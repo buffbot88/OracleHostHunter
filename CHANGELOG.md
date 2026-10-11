@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.0 (2026-10-11)
+
+### Onboarding & UI
+- **First-run walkthrough**: a three-step tour (Check setup → Try once → Start hunting) spotlights
+  each real button and explains it. Skip or finish saves `HasSeenOnboarding` to `config.json`, so it
+  shows once. Replay anytime with the **?** button in the header.
+- **Refreshed dark theme**: rounded inputs with orange focus rings, styled dropdowns and sliders,
+  and reusable section/chip/badge styles.
+- **Simpler dashboard**: numbered step buttons, a 2×2 stat grid, and compact environment chips.
+- **Grouped Settings**: four numbered cards (servers, shape & size, storage & name, retry pace)
+  in a scrollable window with a sticky save button.
+
+### Always Free limits
+- Encoded the current allowances as constants: A1 2 OCPU / 12 GB per month (1,500 OCPU hours and
+  9,000 GB hours), 20 GB object storage, up to 5 volume backups, and the database and NoSQL/MySQL
+  caps.
+
+### Fixes
+- Fixed build errors: duplicate `DisplayNameBase`, missing `HasCredentials`, a stray parenthesis,
+  a duplicate local name in the hunt loop, a missing try-once helper, and an invalid theme template.
+
+### Release & CI
+- GitHub Actions CI builds the project in Release on every push and pull request to `main`.
+- Pushing a `v*` tag builds, verifies the tag matches the project version, publishes a win-x64 zip,
+  and creates a GitHub Release. Credentials and `config.json` are never packaged.
+
 ## 2.0.0 (2026-09-23)
 
 ### Authentication

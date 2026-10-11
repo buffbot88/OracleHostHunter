@@ -26,6 +26,8 @@ public partial class SettingsWindow : Window
         ItemA1.IsSelected = _config.IsFlexibleShape;
         ItemMicro.IsSelected = !_config.IsFlexibleShape;
 
+        ComboInstanceCount.SelectedIndex = Math.Clamp(_config.DesiredInstanceCount, 1, 4) - 1;
+
         var ocpus = _config.Ocpus ?? 2;
         ComboOcpus.SelectedIndex = Math.Clamp(ocpus, 1, 2) - 1;
 
@@ -36,14 +38,36 @@ public partial class SettingsWindow : Window
         SliderBoot.Value = Math.Clamp(_config.BootVolumeSizeGb ?? AppConfig.AlwaysFreeBootVolumeSizeGb,
             AppConfig.AlwaysFreeBootVolumeSizeGb, AppConfig.AlwaysFreeBlockStorageGb);
 
-        TxtDisplayName.Text = _config.DisplayName ?? "free-tier-micro";
+        TxtDisplayName.Text = !string.IsNullOrWhiteSpace(_config.DisplayNameBase)
+            ? _config.DisplayNameBase
+            : (_config.DisplayName ?? "free-tier-instance");
         TxtMinRetry.Text = _config.MinIntervalSeconds.ToString();
         TxtMaxRetry.Text = _config.MaxIntervalSeconds.ToString();
 
-        TxtSafety.Text = $"🛡 Always Free protection is ON: only {AppConfig.MicroShape} or " +
-                         $"{AppConfig.A1FlexShape} within the {AppConfig.AlwaysFreeA1OcpuCount} OCPU / " +
-                         $"{AppConfig.AlwaysFreeA1MemoryGb} GB allotment; boot volume capped at " +
-                         $"{AppConfig.AlwaysFreeBlockStorageGb} GB (account-wide pool); ephemeral public IP only.";
+        UpdateBudgetText();
+        UpdateSafetyText();
+    }
+
+    private int DesiredInstanceCount => ComboInstanceCount.SelectedIndex + 1;
+
+    private void UpdateBudgetText()
+    {
+        var bootPerInstance = (int)SliderBoot.Value;
+        var totalBoot = bootPerInstance * DesiredInstanceCount;
+        var maxInstancesFromBoot = AppConfig.AlwaysFreeMaxBootVolumePoolGb / bootPerInstance;
+
+        var shapeLine = ItemA1.IsSelected
+            ? $"Template: {AppConfig.A1FlexShape} " +
+              $"({ComboOcpus.SelectedIndex + 1} OCPU × {DesiredInstanceCount} = " +
+              $"{(ComboOcpus.SelectedIndex + 1) * DesiredInstanceCount} OCPU total), " +
+              $"memory {ComboMemory.SelectedItem} GB × {DesiredInstanceCount} = " +
+              $"{(int)ComboMemory.SelectedItem * DesiredInstanceCount} GB total"
+            : $"Template: {AppConfig.MicroShape} × {DesiredInstanceCount} instance(s)";
+
+        TxtInstancePoolNote.Text = $"Always Free boot-volume pool: {AppConfig.AlwaysFreeMaxBootVolumePoolGb} GB. " +
+                                   $"At {bootPerInstance} GB per server, that fits up to {Math.Min(maxInstancesFromBoot, AppConfig.AlwaysFreeMaxInstanceCount)} server(s).";
+        TxtBudget.Text = $"Pool view:  {shapeLine};  boot {bootPerInstance} GB × {DesiredInstanceCount} = {totalBoot} GB / " +
+                          $"{AppConfig.AlwaysFreeMaxBootVolumePoolGb} GB Always Free pool.";
     }
 
     private void ReloadMemoryChoices(int ocpus)
@@ -59,11 +83,31 @@ public partial class SettingsWindow : Window
             ComboMemory.SelectedIndex = 0;
     }
 
-    private void ComboMemory_SelectionChanged(object sender, SelectionChangedEventArgs e) { /* value read at save */ }
+    private void ComboMemory_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ComboOcpus.SelectedItem is int ocpus)
+            ReloadMemoryChoices(ocpus);
+        UpdateBudgetText();
+    }
+
+
 
     private void SliderBoot_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (TxtBoot != null) TxtBoot.Text = $"{(int)SliderBoot.Value} GB";
+        UpdateBudgetText();
+    }
+
+    private void ComboShape_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateBudgetText();
+
+    private void ComboInstanceCount_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateBudgetText();
+
+    private void UpdateSafetyText()
+    {
+        TxtSafety.Text = $"🛡 Always Free protection is ON: only {AppConfig.MicroShape} or " +
+                         $"{AppConfig.A1FlexShape} are allowed; A1 stays within {AppConfig.AlwaysFreeA1OcpuCount} OCPU / " +
+                         $"{AppConfig.AlwaysFreeA1MemoryGb} GB; boot volume is capped at {AppConfig.AlwaysFreeMaxBootVolumePoolGb} GB total " +
+                         $"(account-wide pool); ephemeral public IP only.";
     }
 
     private void BtnSave_Click(object sender, RoutedEventArgs e)
@@ -96,7 +140,8 @@ public partial class SettingsWindow : Window
         result.Ocpus = ComboOcpus.SelectedIndex + 1;
         result.MemoryInGbs = ComboMemory.SelectedItem as int?;
         result.BootVolumeSizeGb = (int)SliderBoot.Value;
-        result.DisplayName = TxtDisplayName.Text.Trim();
+        result.DisplayNameBase = TxtDisplayName.Text.Trim();
+        result.DesiredInstanceCount = ComboInstanceCount.SelectedIndex + 1;
         result.MinIntervalSeconds = minRetry;
         result.MaxIntervalSeconds = maxRetry;
         result.AssignPublicIp = true;

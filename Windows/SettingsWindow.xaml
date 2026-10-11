@@ -2,12 +2,13 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="OracleHost — Settings"
-        Width="620" Height="720"
+        Width="640" Height="760"
         WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize" WindowStyle="SingleBorderWindow"
+        ResizeMode="CanResizeWithGrip" WindowStyle="SingleBorderWindow"
+        MinWidth="560" MinHeight="620"
         Background="{StaticResource WindowBg}"
         FontFamily="Segoe UI Variable Text" FontSize="14">
-    <Grid Margin="28,20,28,20">
+    <Grid Margin="28,20,28,16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -15,79 +16,147 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Margin="0,0,0,18">
-            <TextBlock Text="⚙ Settings" FontSize="26" FontWeight="Bold"
-                       Foreground="{StaticResource AccentBrush}"/>
-            <TextBlock Text="Instance settings. Compartment, subnet, and region come from your AccountInfo bundle."
-                       FontSize="13" Foreground="{StaticResource TextSecondary}" Margin="1,6,0,0"/>
+        <StackPanel Grid.Row="0" Margin="0,0,0,14">
+            <TextBlock Text="Settings" FontSize="24" FontWeight="Bold"
+                       Foreground="{StaticResource TextPrimary}"/>
+            <TextBlock Text="One template for every server. Compartment, subnet, and region come from your AccountInfo bundle."
+                       FontSize="13" Foreground="{StaticResource TextSecondary}"
+                       TextWrapping="Wrap" Margin="0,4,0,0"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="1">
-            <TextBlock Text="Instance Shape" Foreground="{StaticResource TextSecondary}" FontSize="13" Margin="0,0,0,6"/>
-            <ComboBox x:Name="ComboShape" Height="38" FontSize="14">
-                <ComboBoxItem x:Name="ItemMicro" Content="VM.Standard.E2.1.Micro  (x86, fixed 1/8 OCPU / 1 GB, up to 2 instances)"/>
-                <ComboBoxItem x:Name="ItemA1" Content="VM.Standard.A1.Flex  (ARM, Always Free: up to 2 OCPU / 12 GB total)"/>
-            </ComboBox>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+            <StackPanel>
 
-            <Grid Margin="0,16,0,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="16"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0">
-                    <TextBlock Text="OCPUs (sent for A1.Flex)" Foreground="{StaticResource TextSecondary}" FontSize="13" Margin="0,0,0,6"/>
-                    <ComboBox x:Name="ComboOcpus" Height="38" FontSize="14" SelectedIndex="1">
-                        <ComboBoxItem Content="1 OCPU"/>
-                        <ComboBoxItem Content="2 OCPUs"/>
-                    </ComboBox>
-                </StackPanel>
-                <StackPanel Grid.Column="2">
-                    <TextBlock Text="Memory GB (sent for A1.Flex)" Foreground="{StaticResource TextSecondary}" FontSize="13" Margin="0,0,0,6"/>
-                    <ComboBox x:Name="ComboMemory" Height="38" FontSize="14" SelectionChanged="ComboMemory_SelectionChanged"/>
-                </StackPanel>
-            </Grid>
+                <!-- 1 · Servers -->
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="1 · How many servers?"/>
+                        <TextBlock FontSize="12.5" Foreground="{StaticResource TextMuted}"
+                                   TextWrapping="Wrap" Margin="0,0,0,10"
+                                   Text="Names are auto-numbered: my-server-1, my-server-2…"/>
+                        <ComboBox x:Name="ComboInstanceCount" Style="{StaticResource FieldCombo}"
+                                  SelectionChanged="ComboInstanceCount_SelectionChanged">
+                            <ComboBoxItem Content="1 server"/>
+                            <ComboBoxItem Content="2 servers"/>
+                            <ComboBoxItem Content="3 servers"/>
+                            <ComboBoxItem Content="4 servers"/>
+                        </ComboBox>
+                        <TextBlock x:Name="TxtInstancePoolNote" Style="{StaticResource HintText}"
+                                   Foreground="{StaticResource TextSecondary}"/>
+                    </StackPanel>
+                </Border>
 
-            <TextBlock Text="Boot Volume GB (50–200)" Foreground="{StaticResource TextSecondary}" FontSize="13" Margin="0,16,0,6"/>
-            <StackPanel Orientation="Horizontal">
-                <Slider x:Name="SliderBoot" Width="330" Minimum="50" Maximum="200" TickFrequency="10"
-                        IsSnapToTickEnabled="True" ValueChanged="SliderBoot_ValueChanged" VerticalAlignment="Center"/>
-                <TextBlock x:Name="TxtBoot" Text="50 GB" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"
-                           Margin="14,0,0,0" VerticalAlignment="Center"/>
+                <!-- 2 · Shape & sizing -->
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="2 · Shape &amp; size"/>
+                        <TextBlock FontSize="12.5" Foreground="{StaticResource TextMuted}"
+                                   TextWrapping="Wrap" Margin="0,0,0,10"
+                                   Text="Micro is fixed. A1 lets you split 2 OCPU / 12 GB across servers."/>
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Instance shape"/>
+                        <ComboBox x:Name="ComboShape" Style="{StaticResource FieldCombo}"
+                                  SelectionChanged="ComboShape_SelectionChanged">
+                            <ComboBoxItem x:Name="ItemMicro" Content="Micro — x86, 1/8 OCPU · 1 GB (up to 2)"/>
+                            <ComboBoxItem x:Name="ItemA1" Content="A1 Flex — ARM, up to 2 OCPU · 12 GB total"/>
+                        </ComboBox>
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="OCPUs per server"/>
+                                <ComboBox x:Name="ComboOcpus" Style="{StaticResource FieldCombo}" SelectedIndex="1">
+                                    <ComboBoxItem Content="1 OCPU"/>
+                                    <ComboBoxItem Content="2 OCPUs"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Memory per server"/>
+                                <ComboBox x:Name="ComboMemory" Style="{StaticResource FieldCombo}"
+                                          SelectionChanged="ComboMemory_SelectionChanged"/>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock FontSize="12" Foreground="{StaticResource TextMuted}"
+                                   TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="OCPUs and memory only apply to A1 Flex — Micro ignores them."/>
+                    </StackPanel>
+                </Border>
+
+                <!-- 3 · Storage & name -->
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="3 · Storage &amp; name"/>
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Boot volume per server"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Slider x:Name="SliderBoot" Grid.Column="0" Minimum="50" Maximum="200"
+                                    TickFrequency="10" IsSnapToTickEnabled="True"
+                                    ValueChanged="SliderBoot_ValueChanged" VerticalAlignment="Center"/>
+                            <Border Grid.Column="1" Style="{StaticResource Chip}" Margin="12,0,0,0">
+                                <TextBlock x:Name="TxtBoot" Text="50 GB" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextPrimary}" FontSize="13.5"/>
+                            </Border>
+                        </Grid>
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="Name for servers" Margin="0,14,0,6"/>
+                        <TextBox x:Name="TxtDisplayName" Style="{StaticResource FieldBox}"/>
+                        <TextBlock FontSize="12.5" Foreground="{StaticResource TextMuted}"
+                                   Margin="0,6,0,0" TextWrapping="Wrap"
+                                   Text="First server is {name}-1, second is {name}-2, and so on."/>
+                    </StackPanel>
+                </Border>
+
+                <!-- 4 · Retry -->
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="4 · Retry pace"/>
+                        <TextBlock FontSize="12.5" Foreground="{StaticResource TextMuted}"
+                                   TextWrapping="Wrap" Margin="0,0,0,10"
+                                   Text="Waits a random time between min and max before each retry. 30–60s works well overnight."/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Wait at least"/>
+                                <TextBox x:Name="TxtMinRetry" Style="{StaticResource FieldBox}"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Style="{StaticResource FieldLabel}" Text="Wait at most"/>
+                                <TextBox x:Name="TxtMaxRetry" Style="{StaticResource FieldBox}"/>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock FontSize="12" Foreground="{StaticResource TextMuted}" Margin="0,6,0,0">
+                            Seconds · between 10 and 600.
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <Border CornerRadius="12" Background="#0E2A1D" BorderBrush="#2A6B45"
+                        BorderThickness="1" Padding="14,12" Margin="0,0,0,12">
+                    <TextBlock x:Name="TxtBudget" TextWrapping="Wrap" FontSize="13"
+                               Foreground="#8FE3A8"/>
+                </Border>
+
+                <Border CornerRadius="12" Background="#12202E" BorderBrush="#2C4A63"
+                        BorderThickness="1" Padding="14,12" Margin="0,0,0,4">
+                    <TextBlock x:Name="TxtSafety" TextWrapping="Wrap" FontSize="13"
+                               Foreground="#9CC8E8"/>
+                </Border>
+
+                <TextBlock x:Name="TxtStatus" FontSize="13" TextWrapping="Wrap" Margin="0,10,0,6"
+                           Foreground="{StaticResource TextSecondary}"/>
             </StackPanel>
-
-            <TextBlock Text="Display Name" Foreground="{StaticResource TextSecondary}" FontSize="13" Margin="0,16,0,6"/>
-            <TextBox x:Name="TxtDisplayName" Height="38" FontSize="14" Padding="8,0,0,0"
-                     VerticalContentAlignment="Center"/>
-
-            <Grid Margin="0,16,0,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="16"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0">
-                    <TextBlock Text="Min Retry (seconds)" Foreground="{StaticResource TextSecondary}" FontSize="13" Margin="0,0,0,6"/>
-                    <TextBox x:Name="TxtMinRetry" Height="38" FontSize="14" Padding="8,0,0,0" VerticalContentAlignment="Center"/>
-                </StackPanel>
-                <StackPanel Grid.Column="2">
-                    <TextBlock Text="Max Retry (seconds)" Foreground="{StaticResource TextSecondary}" FontSize="13" Margin="0,0,0,6"/>
-                    <TextBox x:Name="TxtMaxRetry" Height="38" FontSize="14" Padding="8,0,0,0" VerticalContentAlignment="Center"/>
-                </StackPanel>
-            </Grid>
-
-            <Border CornerRadius="10" Background="#0A27D76C" BorderBrush="#3327D76C"
-                    BorderThickness="1" Padding="14,10" Margin="0,18,0,0">
-                <TextBlock x:Name="TxtSafety" TextWrapping="Wrap" FontSize="12.5"
-                           Foreground="#86EFAC"/>
-            </Border>
-
-            <TextBlock x:Name="TxtStatus" FontSize="13" TextWrapping="Wrap" Margin="0,12,0,0"
-                       Foreground="{StaticResource TextSecondary}"/>
-        </StackPanel>
+        </ScrollViewer>
 
         <Button Grid.Row="2" x:Name="BtnSave" Style="{StaticResource ActionButton}"
-                Background="{StaticResource GreenGrad}" Content="💾  Save Configuration"
-                Height="48" FontSize="15" Margin="0,16,0,0" Click="BtnSave_Click"/>
+                Background="{StaticResource GreenGrad}" Content="✓  Save settings"
+                Height="50" FontSize="15" Margin="0,12,0,0" Click="BtnSave_Click"/>
     </Grid>
 </Window>
