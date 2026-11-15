@@ -54,7 +54,7 @@ exactly that, as a **C# WPF desktop application** for Windows.
 | Capacity hunting, AD rotation, retry-vs-abort | ✅ shipped |
 | Always Free safeguards (shape, OCPU, memory, boot pool) | ✅ shipped |
 | SSH key-pair validation | ✅ shipped |
-| Optional Oracle Linux 9 cloud-init | ✅ shipped · off by default |
+| Optional Oracle Linux cloud-init (opt-in) | ✅ shipped · off by default |
 | TCP port 22 probe | ✅ shipped |
 | Authenticated SSH verification | ✅ shipped |
 | Provision-log retrieval and parsing | ✅ shipped |
@@ -185,7 +185,7 @@ next to the project root and it just works.
 When the AccountInfo bundle is complete, startup skips straight to the dashboard — compartment,
 subnet, and region all come from `information.md` and are never asked for. Open **⚙ Settings** to
 choose the instance shape (**E2.1.Micro** or **A1.Flex**), OCPUs, memory, boot volume size, display
-name, and retry intervals.
+name, retry intervals, and the **5 · SSH** options (private-key path, cloud-init, health check).
 
 > OCPUs and memory are saved for both shapes but only sent to OCI for **A1.Flex** — the micro shape
 > is fixed at 1/8 OCPU / 1 GB and rejects a shape config.
@@ -198,16 +198,17 @@ If you don't have a VCN yet (needed before any launch):
 
 ### 5. Run the hunt
 
-On the main dashboard, hit **✓ Preflight Check** first (validates credentials and shows your detected
-Always Free limits), then **▶ Start Hunting**. On success you'll get the instance OCID and public IP,
+On the main dashboard, run **1 · Check setup** first (validates credentials and shows your detected
+Always Free limits), then **3 · Start hunting**. On success you'll get the instance OCID and public IP,
 ready to `ssh opc@<ip>`.
 
 | Button | What it does |
 |---|---|
-| **✓ Preflight Check** | Validates credentials, detects limits, shows existing instances |
-| **⚡ Try Once** | Single launch attempt |
-| **▶ Start Hunting** | Continuous retry loop with live status updates |
-| **⏹ Stop** | Cancel the current hunt |
+| **1 · Check setup** | Validates credentials, detects limits, inventories existing instances. Creates nothing |
+| **2 · Try once** | One pass of launches, then stops — it does not retry capacity failures |
+| **3 · Start hunting** | Continuous randomized retry loop; becomes **Stop** while running |
+| **Stop** | Cancels the current hunt |
+| **Diagnose network** | Read-only VNIC / subnet / route / NSG check for an existing instance |
 
 ---
 
@@ -216,22 +217,27 @@ ready to `ssh opc@<ip>`.
 A launch result distinguishes **RUNNING** from **reachable**. The chain is read-only at every step and
 never terminates, retries, or modifies an instance because a check failed.
 
-1. **Preflight** validates the public-key format and key-pair pairing, reports the image/cloud-init
+1. **Check setup** validates the public-key format and key-pair pairing, reports the image/cloud-init
    setting, and classifies TCP 22 ingress as `Allowed`, `Blocked`, or `Unknown` across the subnet
-   security lists and only the NSGs listed in `vnic_nsg_ids`. It never reports `Blocked` when a
+   security lists and only the NSGs listed in `VnicNsgIds`. It never reports `Blocked` when a
    permission gap prevented a full look, and reports a public-IP problem separately from an
    ingress-rule problem.
-2. **After RUNNING** it probes TCP 22, then attempts a real key login (`BatchMode`, no password).
-   A TCP connect alone is only ever reported as "SSH port reachable (login not verified)".
+   > Ingress rules are counted only when their source is `0.0.0.0/0`. A rule scoped to your own
+   > public IP (`/32`) is not counted before launch, so treat a pre-launch `Blocked` as "not proven"
+   > rather than as proof that your rule is wrong — **Diagnose network** matches a specific source IP.
+2. **After RUNNING** (requires `EnableSshHealthCheck`, `AssignPublicIp`, and an assigned public IP)
+   it probes TCP 22, then attempts a real key login with that private key (`BatchMode`, password auth
+   disabled). A TCP connect alone is only ever reported as "SSH port reachable (login not verified)".
 3. **Host-key trust** is required first. The approval dialog shows the `ssh-keyscan` fingerprints and
    states plainly that keyscan does **not** authenticate the server, so the fingerprint must be
    checked against a trusted source before accepting. Approved keys are stored per instance OCID in
    `%LOCALAPPDATA%\OracleHost\known_hosts` and enforced with `StrictHostKeyChecking=yes`. A changed
    key blocks verification until you review it.
-4. **Provision log** (`enable_cloud_init`, Oracle Linux only): after a verified login the app reads
-   `/var/log/oraclehost-provision.log` back and reports each step — SSH daemon, firewall service,
-   SSH firewall rule — as Success, Failed, or Unknown. `Not Applicable` means cloud-init was off for
-   that launch; a missing log is never reported as an authentication failure.
+4. **Provision log** (`EnableCloudInit` on an Oracle Linux image): after a verified login the app
+   reads `/var/log/oraclehost-provision.log` back and reports each step — SSH daemon, firewall
+   service, SSH firewall rule — as Success, Failed, or Unknown. `Not Applicable` means cloud-init was
+   not applied to that launch (switched off, or the image is not Oracle Linux); a missing log is
+   never reported as an authentication failure.
 
 > [!NOTE]
 > Ingress allow rules do not prove end-to-end SSH: the route table, the instance's own firewall and
@@ -263,7 +269,12 @@ Helpers/
 ├── CryptoHelper.cs        # SSH key format/pair validation + OCI fingerprint computation
 ├── SshProbe.cs            # TCP 22 probe, authenticated SSH, host-key trust, provision log
 └── DiagnosticLog.cs       # Diagnostic logging
+Themes/
+└── Glass.xaml             # Card, chip, button and gradient styles used by every window
 ```
+
+> `Forms/` is an empty leftover directory from the WinForms build; the WPF app in `Windows/` is
+the live UI.
 
 ---
 
@@ -271,18 +282,25 @@ Helpers/
 
 ## ⚙️ Config reference (`config.json`)
 
-Stored at `%USERPROFILE%\OracleHost\config.json`. Secrets never appear here — only paths.
+Stored at `%USERPROFILE%\OracleHost\config.json` and written by the app, so keys are **PascalCase**
+(`Shape`, not `shape`). No secrets are stored here — only paths. Missing keys fall back to their
+default, so deleting a line is enough to reset it.
+
+> The app also writes computed values (`IsFlexibleShape`, `ActiveLimitName`, `AlwaysFreeAllowance`,
+> `MaxInstancesForCurrentTemplate`, `HasCredentials`, …). They are ignored on load — editing them
+> changes nothing.
 
 <details>
 <summary><b>Identity &amp; network</b></summary>
 
 | Key | Default | Meaning |
 |---|---|---|
-| `region` | `null` | Region override (defaults to `~/.oci/config`) |
-| `compartment_ocid` | — | **required** — compartment to launch into |
-| `subnet_ocid` | — | **required** — subnet to attach the instance to |
-| `vnic_nsg_ids` | `[]` | NSG OCIDs attached to the new VNIC at launch. Preflight evaluates only these NSGs — unrelated VCN NSGs never count as SSH ingress |
-| `assign_public_ip` | `true` | Attach a public IP. Ephemeral only; no reserved IP is ever created |
+| `Region` | `null` | Region override. Otherwise adopted from AccountInfo (`Home region`) / `~/.oci/config`, falling back to `us-ashburn-1` |
+| `CompartmentOcid` | `""` | **required** — compartment to launch into. Adopted from AccountInfo at startup |
+| `SubnetOcid` | `""` | **required** — subnet to attach the instance to. Adopted from AccountInfo at startup |
+| `VnicNsgIds` | `[]` | NSG OCIDs attached to the new VNIC at launch. This is the **only** NSG input to preflight — unrelated VCN NSGs never count as SSH ingress |
+| `AssignPublicIp` | `true` | Attach a public IP. Ephemeral only; no reserved IP is ever created |
+| `OciConfigPath` | `~/.oci/config` | Fallback credential source when no inline AccountInfo keys are present |
 
 </details>
 
@@ -291,10 +309,10 @@ Stored at `%USERPROFILE%\OracleHost\config.json`. Secrets never appear here — 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ssh_public_key_path` | `~/.ssh/id_rsa.pub` | Your public key (must start with `ssh-rsa`) |
-| `ssh_private_key_path` | `null` | Private key used to *verify* login. When null it is derived by stripping `.pub` from `ssh_public_key_path` |
-| `enable_ssh_health_check` | `true` | After RUNNING, probe TCP 22 and attempt an authenticated login |
-| `enable_cloud_init` | `false` | Oracle Linux only: attach cloud-init `user_data` that configures `sshd`/`firewalld` and records exit codes to `/var/log/oraclehost-provision.log` (applies to newly provisioned instances only) |
+| `SshPublicKeyPath` | `~/.ssh/id_rsa.pub` | Public key injected as `ssh_authorized_keys`. Accepts `ssh-rsa` or `ssh-ed25519`. If the path does not exist, startup creates `~/.ssh/oraclehost_id_rsa`(+`.pub`) and stores that instead |
+| `SshPrivateKeyPath` | `null` | Private key used to *verify* login. When null it is derived by stripping `.pub` from `SshPublicKeyPath` |
+| `EnableSshHealthCheck` | `true` | After RUNNING, probe TCP 22 and attempt an authenticated login. Only runs when `AssignPublicIp` is on and a public IP was assigned |
+| `EnableCloudInit` | `false` | Oracle Linux images only: attach cloud-init `user_data` that configures `sshd`/`firewalld` and records exit codes to `/var/log/oraclehost-provision.log`. Applies to newly provisioned instances only |
 
 </details>
 
@@ -303,14 +321,16 @@ Stored at `%USERPROFILE%\OracleHost\config.json`. Secrets never appear here — 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `shape` | `VM.Standard.E2.1.Micro` | `VM.Standard.E2.1.Micro` or `VM.Standard.A1.Flex` |
-| `ocpus` | `2` (A1) | A1.Flex OCPU count (1–2, Always Free cap). Saved for both shapes but only sent for A1.Flex |
-| `memory_in_gbs` | `12` (A1) | A1.Flex memory in GB (1–12; OCI allows 1–6 GB per OCPU). Only sent for A1.Flex |
-| `image_os` | `Oracle Linux` | OS to resolve (`Oracle Linux`, `Canonical Ubuntu`, …) |
-| `image_version` | `latest` | `latest` or a substring of the image display name |
-| `display_name` | `free-tier-micro` | Instance name |
-| `boot_volume_size_gb` | `50` | 50–200 GB; OCI-required minimum is 50, and the published Always Free pool is 200 GB total across boot/block volumes |
-| `account_info_fingerprint` | — | SHA-256 of the AccountInfo bundle; config.json is only rewritten when the bundle changes |
+| `Shape` | `VM.Standard.E2.1.Micro` | `VM.Standard.E2.1.Micro` or `VM.Standard.A1.Flex`; anything else fails validation |
+| `Ocpus` | `null` → `2` | A1.Flex OCPU count (1–2, Always Free cap). Saved for both shapes but only sent for A1.Flex |
+| `MemoryInGbs` | `null` → `Ocpus × 6` (`12`) | A1.Flex memory in GB (1–12; OCI allows 1–6 GB per OCPU). Only sent for A1.Flex |
+| `ImageOs` | `Oracle Linux` | OS to resolve (`Oracle Linux`, `Canonical Ubuntu`, …) |
+| `ImageVersion` | `latest` | `latest` or a substring of the image display name |
+| `DisplayName` | `free-tier-micro` | Legacy single-instance name |
+| `DisplayNameBase` | `free-tier-instance` | Base name for the shared template; indexed as `-1`, `-2` when more than one instance is targeted |
+| `DesiredInstanceCount` | `1` | Target instances for this shape (1–2, clamped to the Always Free pool) |
+| `BootVolumeSizeGb` | `null` → `50` | 50–200 GB; OCI-required minimum is 50, and the published Always Free pool is 200 GB total across boot/block volumes |
+| `AccountInfoFingerprint` | `null` | SHA-256 of the AccountInfo bundle; config.json is only rewritten when the bundle changes |
 
 </details>
 
@@ -319,12 +339,22 @@ Stored at `%USERPROFILE%\OracleHost\config.json`. Secrets never appear here — 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `availability_domains` | `"all"` | `"all"`, one AD, or a list of ADs |
-| `min_interval_seconds` | `30` | Minimum randomized retry delay in seconds |
-| `max_interval_seconds` | `60` | Maximum randomized retry delay in seconds |
-| `stop_on_limit` | `true` | Abort on `LimitExceeded` instead of retrying |
-| `max_attempts` | `0` | `0` = unlimited |
-| `allow_existing` | `false` | Skip the "instance already exists" sanity check |
+| `AvailabilityDomains` | `"all"` | `"all"`, one AD, or a comma-separated list |
+| `MinIntervalSeconds` | `30` | Minimum randomized retry delay in seconds |
+| `MaxIntervalSeconds` | `60` | Maximum randomized retry delay in seconds |
+| `StopOnLimit` | `true` | Abort on `LimitExceeded` instead of retrying |
+| `MaxAttempts` | `0` | `0` = unlimited |
+| `AllowExisting` | `false` | Accepted for compatibility but **has no effect**: preflight always inventories the tenancy and enforces the Always Free allowance |
+| `HasSeenOnboarding` | `false` | First-run walkthrough already shown |
+
+</details>
+
+<details>
+<summary><b>Credentials (adopted from AccountInfo — do not hand-edit)</b></summary>
+
+| Key | Meaning |
+|---|---|
+| `UserOcid`, `TenancyOcid`, `Fingerprint`, `KeyFilePath` | Copied from the `AccountInfo` bundle on every startup. `KeyFilePath` is a path, never the key itself |
 
 </details>
 
@@ -371,9 +401,9 @@ you what to fix instead.
 |---|---|
 | `No OCI credentials found` / AccountInfo error | Check the folder rules above: one private PEM, four required OCIDs, folder named `AccountInfo` next to the project or EXE |
 | `SSH public key not found` | `ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa` then re-run |
-| `No ... images found` | Try `"image_os": "Canonical Ubuntu"` or check the region |
-| `None of the requested ADs exist` | Delete the `availability_domains` key or use `"all"` |
-| `You already have ... micro instance(s)` | Delete an instance or set `"allow_existing": true` (the Always Free allowance is 2 micro instances) |
+| `No ... images found` | Try `"ImageOs": "Canonical Ubuntu"` or check the region |
+| `None of the requested ADs exist` | Delete the `AvailabilityDomains` key or use `"all"` |
+| `You already have ... micro instance(s)` | The tenancy already holds the maximum 2 micro instances (any compartment). Remove one — there is no override; `AllowExisting` is ignored |
 | A1 launch rejected or preflight complains about OCPUs/memory | A1 sizing must stay within 2 OCPU / 12 GB with 1–6 GB per OCPU; adjust in ⚙ Settings |
 | Preflight says the shape is offered in no AD | Your region may not serve that shape; check Limits, Quotas and Usage for the shape's limit name (`standard-e2-micro-core-count` / `standard-a1-core-count`) |
 | Instance created but SSH fails | Check the security list allows TCP 22; wait ~2 min for boot |
