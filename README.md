@@ -1,4 +1,4 @@
-# OracleHost v2 — Always Free Instance Hunter (Windows Desktop)
+# OracleHost v3 — Always Free Instance Hunter (Windows Desktop)
 
 Oracle's Always Free tier includes two VM shapes this app can hunt:
 
@@ -15,7 +15,7 @@ exactly that, as a **C# WinForms desktop application** for Windows.
 > the shape** via `ListShapes`, so attempts are never wasted on ADs that cannot serve it. Always Free
 > egress is **10 TB/month**, not 1 GB.
 
-See [CHANGELOG.md](CHANGELOG.md) for what changed in v2.
+See [CHANGELOG.md](CHANGELOG.md) for what changed in v3.
 
 ---
 
@@ -159,16 +159,45 @@ The dashboard provides:
 
 ---
 
+## Verified SSH access
+
+A launch result distinguishes **RUNNING** from **reachable**. The chain is read-only at every step and
+never terminates, retries, or modifies an instance because a check failed.
+
+1. **Preflight** validates the public-key format and key-pair pairing, reports the image/cloud-init
+   setting, and classifies TCP 22 ingress as `Allowed`, `Blocked`, or `Unknown` across the subnet
+   security lists and only the NSGs listed in `vnic_nsg_ids`. It never reports `Blocked` when a
+   permission gap prevented a full look, and reports a public-IP problem separately from an
+   ingress-rule problem.
+2. **After RUNNING** it probes TCP 22, then attempts a real key login (`BatchMode`, no password).
+   A TCP connect alone is only ever reported as "SSH port reachable (login not verified)".
+3. **Host-key trust** is required first. The approval dialog shows the `ssh-keyscan` fingerprints and
+   states plainly that keyscan does **not** authenticate the server, so the fingerprint must be
+   checked against a trusted source before accepting. Approved keys are stored per instance OCID in
+   `%LOCALAPPDATA%\OracleHost\known_hosts` and enforced with `StrictHostKeyChecking=yes`. A changed
+   key blocks verification until you review it.
+4. **Provision log** (`enable_cloud_init`, Oracle Linux only): after a verified login the app reads
+   `/var/log/oraclehost-provision.log` back and reports each step — SSH daemon, firewall service,
+   SSH firewall rule — as Success, Failed, or Unknown. `Not Applicable` means cloud-init was off for
+   that launch; a missing log is never reported as an authentication failure.
+
+> Ingress allow rules do not prove end-to-end SSH: the route table, the instance's own firewall and
+> `sshd` still matter. That is exactly what steps 2–4 are for.
+
+---
+
 ## Project structure
 
 ```
-OracleHost.csproj          # .NET 8 WinForms project, OCI SDK NuGet refs, v2.0.0
+OracleHost.csproj          # .NET 8 WPF project, OCI SDK NuGet refs, v3.0.0
 CHANGELOG.md               # release history
-Program.cs                 # Entry point: load config → adopt AccountInfo → validate → main form
-Forms/
-├── SetupWizardForm.cs     # ⚙ Settings dialog: shape, sizing, boot volume, retries
-├── MainForm.cs            # Hunting dashboard with live status + activity log
-└── AccountInfoReportForm.cs # Startup dialog listing found/missing AccountInfo fields
+Program.cs                 # Entry point: load config → adopt AccountInfo → validate → main window
+Windows/
+├── MainWindow.xaml(.cs)   # Hunting dashboard with live status + activity log
+├── SettingsWindow.xaml(.cs) # ⚙ Settings: shape, sizing, boot volume, retries, SSH
+├── NetworkDiagnosticWindow.xaml(.cs) # VNIC/subnet/NSG diagnostics for one instance
+├── AccountInfoReportWindow.xaml(.cs) # Startup dialog listing found/missing AccountInfo fields
+└── OciGuideWindow.xaml(.cs) # In-app OCI setup guide
 Services/
 ├── OciService.cs          # OCI SDK wrapper (compute, identity, networking, limits)
 ├── ErrorClassifier.cs     # Retry vs abort error classification
@@ -178,7 +207,8 @@ Models/
 ├── AppConfig.cs           # Configuration model (config.json schema)
 └── HuntStatus.cs          # Runtime hunt state tracking
 Helpers/
-├── CryptoHelper.cs        # RSA key generation + OCI fingerprint computation
+├── CryptoHelper.cs        # SSH key format/pair validation + OCI fingerprint computation
+├── SshProbe.cs            # TCP 22 probe, authenticated SSH, host-key trust, provision log
 └── DiagnosticLog.cs       # Diagnostic logging
 ```
 
@@ -194,6 +224,10 @@ The app stores its config at `%USERPROFILE%\OracleHost\config.json`.
 | `compartment_ocid` | — | **required** — compartment to launch into |
 | `subnet_ocid` | — | **required** — subnet to attach the instance to |
 | `ssh_public_key_path` | `~/.ssh/id_rsa.pub` | Your public key (must start with `ssh-rsa`) |
+| `ssh_private_key_path` | `null` | Private key used to *verify* login. When null it is derived by stripping `.pub` from `ssh_public_key_path` |
+| `enable_ssh_health_check` | `true` | After RUNNING, probe TCP 22 and attempt an authenticated login |
+| `enable_cloud_init` | `false` | Oracle Linux only: attach cloud-init `user_data` that configures `sshd`/`firewalld` and records exit codes to `/var/log/oraclehost-provision.log` (applies to newly provisioned instances only) |
+| `vnic_nsg_ids` | `[]` | NSG OCIDs attached to the new VNIC at launch. Preflight evaluates only these NSGs — unrelated VCN NSGs never count as SSH ingress |
 | `shape` | `VM.Standard.E2.1.Micro` | `VM.Standard.E2.1.Micro` or `VM.Standard.A1.Flex` |
 | `ocpus` | `2` (A1) | A1.Flex OCPU count (1–2, Always Free cap). Saved for both shapes but only sent for A1.Flex |
 | `memory_in_gbs` | `12` (A1) | A1.Flex memory in GB (1–12; OCI allows 1–6 GB per OCPU). Only sent for A1.Flex |

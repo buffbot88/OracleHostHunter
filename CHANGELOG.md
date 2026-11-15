@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 (2026-11-15)
+## 3.0.0 (2026-11-15)
 
 ### SSH diagnostics
 - **Read-only SSH readiness preflight**: validates public-key format, private-key pairing, the

@@ -9,10 +9,10 @@
     <Nullable>enable</Nullable>
     <AssemblyName>OracleHost</AssemblyName>
     <RootNamespace>OracleHost</RootNamespace>
-    <Version>0.5.0</Version>
+    <Version>3.0.0</Version>
     <Authors>OracleHost</Authors>
     <Description>Always Free Instance Hunter - WPF Client (v2)</Description>
-    <InformationalVersion>OracleHost 0.5</InformationalVersion>
+    <InformationalVersion>OracleHost 3.0</InformationalVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <StartupObject>OracleHost.Program</StartupObject>
   </PropertyGroup>

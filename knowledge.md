@@ -1,7 +1,7 @@
 # OracleHost — Project Knowledge
 
 ## What this is
-**OracleHost** (v2) is a C# WinForms desktop app (Windows-only, modern dark theme using
+**OracleHost** (v3) is a C# WPF desktop app (Windows-only, modern dark theme using
 Segoe UI Variable and an orange `#F97322` accent) that auto-retries launching a free Oracle Cloud
 **Always Free** instance until capacity frees up. Two supported shapes, selectable in ⚙ Settings:
 `VM.Standard.E2.1.Micro` (x86, fixed 1/8 OCPU / 1 GB, up to 2 instances) and `VM.Standard.A1.Flex`
@@ -12,10 +12,12 @@ logic is the core safety feature.
 ## Where key code lives
 | Path | Purpose |
 |---|---|
-| `Program.cs` | Entry point: load config → adopt AccountInfo credentials → validate → MainForm flow (no wizard loop) |
-| `Forms/SetupWizardForm.cs` | ⚙ Settings dialog: shape, OCPUs, memory, boot volume, display name, retries. No compartment/subnet/region fields — those come from AccountInfo only |
-| `Forms/MainForm.cs` | Hunting dashboard: preflight, try-once, start/stop, activity log, v2 styling |
-| `Forms/AccountInfoReportForm.cs` | Startup dialog listing found/missing AccountInfo fields |
+| `Program.cs` | Entry point: load config → adopt AccountInfo credentials → validate → main window (no wizard loop) |
+| `Windows/MainWindow.xaml(.cs)` | Hunting dashboard: preflight, try-once, start/stop, activity log |
+| `Windows/SettingsWindow.xaml(.cs)` | ⚙ Settings: shape, OCPUs, memory, boot volume, display name, retries, SSH ("5 · SSH"). No compartment/subnet/region fields — those come from AccountInfo only |
+| `Windows/NetworkDiagnosticWindow.xaml(.cs)` | Read-only VNIC / subnet / route / NSG diagnostics for one instance |
+| `Windows/AccountInfoReportWindow.xaml(.cs)` | Startup dialog listing found/missing AccountInfo fields |
+| `Helpers/SshProbe.cs` | TCP 22 probe, authenticated SSH login, OCID-scoped host-key trust, read-only provision-log retrieval and parsing |
 | `Services/OciService.cs` | OCI SDK wrapper (compute, identity, networking, limits); sends ShapeConfig only for A1.Flex |
 | `Services/ErrorClassifier.cs` | Retry vs abort classification (mirrors Python logic) |
 | `Services/ConfigService.cs` | Load/save `~/OracleHost/config.json`, read `AccountInfo/information.md`, AccountInfo bundle fingerprint |
@@ -33,7 +35,7 @@ dotnet run     # launch the GUI
 No test or lint infrastructure exists in this repo.
 
 ## Conventions & constraints
-- **Target**: `net8.0-windows`, WinForms, `Nullable` + `ImplicitUsings` enabled.
+- **Target**: `net8.0-windows`, WPF (`UseWPF` + `UseWindowsForms` for the tray icon), `Nullable` + `ImplicitUsings` enabled.
 - **NuGet**: `OCI.DotNetSDK.*` v69.* (Common/Core/Identity/Limits) and
   `Newtonsoft.Json` 13.* — all floating versions (`69.*`, `13.*`).
 - **Config storage**: `%USERPROFILE%\OracleHost\config.json` (not project-local).
@@ -54,6 +56,15 @@ No test or lint infrastructure exists in this repo.
   - `System.Drawing.Image` vs `Oci.CoreService.Models.Image` conflict is
     resolved with `using Image = Oci.CoreService.Models.Image;` in OciService.cs
     — keep the alias if touching image code.
+  - **SSH trust is fail-closed**: host keys are stored per instance OCID in
+    `%LOCALAPPDATA%\OracleHost\known_hosts` (valid `known_hosts` syntax, OCID in a trailing
+    comment) and each ssh call gets a per-OCID rendered view with
+    `StrictHostKeyChecking=yes`. Trust is bound to the address it was approved on, so a
+    changed public IP after stop/start requires re-approval — never weaken this.
+  - `ssh-keyscan` does not authenticate the server; it only supplies candidate keys for the
+    approval dialog. The dialog must keep warning users to verify fingerprints out-of-band.
+  - Diagnostics are read-only: never restart services, reload firewalls, terminate, retry, or
+    count a failed probe as a launch failure.
   - Inline credentials are written to a temp OCI config under
     `%TEMP%\OracleHost\` and cleaned up on dispose — don't leave that dir lying
     around with keys.
