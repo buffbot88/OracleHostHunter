@@ -86,8 +86,44 @@ public partial class MainWindow : Window
     {
         TxtEnvCompartment.Text = $"Compartment:  {TruncateOcid(_config.CompartmentOcid)}";
         TxtEnvCompartment.ToolTip = _config.CompartmentOcid;
-        TxtEnvSsh.Text = $"SSH:  {Path.GetFileName(_config.SshPublicKeyPath)}";
+        var sshFile = Path.GetFileName(_config.SshPublicKeyPath);
+        if (CheckSshPair(out var sshDetail))
+        {
+            TxtEnvSsh.Text = $"SSH:  {sshFile}";
+            TxtEnvSsh.ToolTip = sshDetail;
+            TxtEnvSsh.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
+        }
+        else
+        {
+            TxtEnvSsh.Text = $"SSH:  {sshFile} ⚠ unverified";
+            TxtEnvSsh.ToolTip = sshDetail;
+            TxtEnvSsh.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
+        }
         TxtEnvRetry.Text = $"Retry:  {_config.MinIntervalSeconds}–{_config.MaxIntervalSeconds}s";
+    }
+
+    /// <summary>
+    /// Returns true when the configured SSH public key matches a local private
+    /// key. A false result is a warning only — format-only launches are still
+    /// allowed — but it must be surfaced so it cannot be missed at launch time.
+    /// </summary>
+    private bool CheckSshPair(out string detail)
+    {
+        try
+        {
+            var verified = CryptoHelper.ValidateSshKeyPair(
+                _config.SshPublicKeyPath,
+                CryptoHelper.DerivePrivateKeyPath(_config.SshPublicKeyPath, _config.SshPrivateKeyPath));
+            detail = verified
+                ? "SSH key pair verified."
+                : "SSH pairing NOT verified: no private key found. Public-key format is valid, but SSH login cannot be proven. Launch will proceed with format-only validation.";
+            return verified;
+        }
+        catch (Exception ex)
+        {
+            detail = $"SSH pairing failed: {DiagnosticLog.Redact(ex.Message)}";
+            return false;
+        }
     }
 
     private static string TruncateOcid(string ocid) =>
@@ -324,6 +360,9 @@ public partial class MainWindow : Window
             HuntState.Preflight => ("●  PREFLIGHT", (System.Windows.Media.Brush)FindResource("VioletBrush"), "Validating credentials and limits..."),
             HuntState.Hunting when _status.NextRetryIn > 0 => ($"●  WAITING ({_status.NextRetryIn:F0}s)", (System.Windows.Media.Brush)FindResource("WarningBrush"), "Oracle has no capacity yet — retrying soon..."),
             HuntState.Hunting => ("●  HUNTING", (System.Windows.Media.Brush)FindResource("SuccessBrush"), "Searching for Always Free capacity..."),
+            HuntState.Success when _status.SshState == SshProbeResult.Unreachable || _status.SshState == SshProbeResult.Pending => ("●  SUCCESS", (System.Windows.Media.Brush)FindResource("SuccessBrush"), "Instance is running — Recovery required: SSH remains inaccessible, instance preserved."),
+            HuntState.Success when _status.SshState == SshProbeResult.LoginVerified => ("●  SUCCESS", (System.Windows.Media.Brush)FindResource("SuccessBrush"), "Instance is running — SSH login verified."),
+            HuntState.Success when _status.SshState == SshProbeResult.Reachable => ("●  SUCCESS", (System.Windows.Media.Brush)FindResource("SuccessBrush"), "Instance is running — SSH port reachable (login not verified)."),
             HuntState.Success => ("●  SUCCESS", (System.Windows.Media.Brush)FindResource("SuccessBrush"), "Instance is running — connect via SSH."),
             HuntState.Aborted => ("●  ERROR", (System.Windows.Media.Brush)FindResource("DangerBrush"), "Unable to complete the request — see the log."),
             HuntState.Stopped => ("●  STOPPED", (System.Windows.Media.Brush)FindResource("TextSecondary"), "Hunt stopped. Start again at any time."),
@@ -400,10 +439,18 @@ public partial class MainWindow : Window
             : "Running preflight check...");
         UpdateStatusDisplay();
 
+        bool sshPairVerified = false;
         try
         {
             using var oci = CreateOciService();
             AppendLog($"Region: {oci.Region ?? _config.Region ?? "unknown"}");
+            sshPairVerified = CheckSshPair(out var sshDetail);
+            AppendLog(sshPairVerified
+                ? $"✓ {sshDetail}"
+                : $"⚠ {sshDetail} Launch will proceed with format-only validation.");
+            var readiness = await oci.DiagnoseSshReadinessAsync(_config, ct);
+            foreach (var check in readiness.Checks)
+                AppendLog($"[{check.State}] SSH readiness — {check.Title}: {check.Detail}");
 
             var allAds = await oci.ListAvailabilityDomainsAsync(ct);
             AppendLog($"Availability domains: {string.Join(", ", allAds)}");
@@ -433,7 +480,9 @@ public partial class MainWindow : Window
                     "Always Free limits could not be verified; Oracle returned no usable limit value.");
 
             AppendLog($"Always Free limit ({_config.ActiveLimitName}): {limit.Value}");
-            AppendLog("✅ Preflight OK - everything looks ready.");
+            AppendLog(sshPairVerified
+                ? "✅ Preflight OK - everything looks ready."
+                : "✅ Preflight OK - everything looks ready. (SSH pairing unverified — SSH login not proven.)");
             _status.State = HuntState.Idle;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -864,11 +913,59 @@ public partial class MainWindow : Window
             _status.SuccessInstanceId = instance.Id;
             AppendLog($"✅ Instance created: {instance.Id}; waiting for RUNNING state...");
 
-            var running = await WaitForRunningAsync(oci, instance.Id, ct);
-            if (!running)
+            var runningFor = await WaitForRunningAsync(oci, instance.Id, ct);
+            if (!runningFor.HasValue)
             {
                 _status.LastError = "Instance was created but did not reach RUNNING state.";
                 return AttemptOutcome.Retry;
+            }
+
+            // Probe after RUNNING. A probe failure never retries/terminates:
+            // the instance exists and counts toward the target.
+            if (_config.EnableSshHealthCheck && _config.AssignPublicIp && !string.IsNullOrWhiteSpace(_status.PublicIp))
+            {
+                _status.SshState = await SshProbe.ProbeSshAsync(_status.PublicIp, runningFor.Value, ct);
+                AppendLog($"Provisioned → Running → Port ({_status.SshState})");
+                if (_status.SshState == SshProbeResult.Reachable)
+                {
+                    var privatePath = CryptoHelper.DerivePrivateKeyPath(_config.SshPublicKeyPath, _config.SshPrivateKeyPath);
+                    var auth = await SshProbe.TryAuthenticateAsync(_status.PublicIp, privatePath, "opc", ct, instanceOcid: _status.SuccessInstanceId, onPrompt: PromptHostKeyApprovalAsync);
+                    if (auth == SshAuthResult.Verified)
+                    {
+                        _status.SshState = SshProbeResult.LoginVerified;
+                        AppendLog($"✅ SSH login verified — ssh opc@{_status.PublicIp} (key authentication succeeded)");
+                        var cloudInitEnabled = _config.EnableCloudInit && _config.IsOracleLinuxImage;
+                        var report = await SshProbe.TryRetrieveProvisionLogAsync(_status.PublicIp, privatePath, cloudInitEnabled, "opc", ct, instanceOcid: _status.SuccessInstanceId, onPrompt: PromptHostKeyApprovalAsync);
+                        _status.ProvisionLogKind = report.LogKind;
+                        _status.ProvisionSteps = report.Steps;
+                        if (report.LogKind == ProvisionLogKind.Retrieved)
+                        {
+                            static string Label(ProvisionStepOutcome s) => s switch { ProvisionStepOutcome.Success => "Success", ProvisionStepOutcome.Failed => "Failed", ProvisionStepOutcome.Unknown => "Unknown", _ => "Unknown" };
+                            var sshRule = ProvisionLogParser.CollapseSshFirewallRule(report.Steps);
+                            AppendLog($"Provision log retrieved: SSH daemon={Label(report.Steps["sshd"])}, Firewall service={Label(report.Steps["firewalld"])}, SSH firewall rule={Label(sshRule)} (firewall_add={Label(report.Steps["firewall_add"])}, firewall_query={Label(report.Steps["firewall_query"])}, firewall_reload={Label(report.Steps["firewall_reload"])})");
+                        }
+                        else if (report.LogKind == ProvisionLogKind.NotApplicable)
+                            AppendLog("Provision log: Not Applicable (cloud-init disabled for this launch) — not a failure.");
+                        else if (report.LogKind == ProvisionLogKind.Missing)
+                            AppendLog("Provision log: Missing (/var/log/oraclehost-provision.log unavailable) — login itself is verified; first-boot config cannot be confirmed.");
+                        else
+                            AppendLog("Provision log: Error (could not retrieve; read-only attempt failed). Login is still verified; provisioning outcome unknown.");
+                    }
+                    else if (auth == SshAuthResult.FailedAuth)
+                        AppendLog($"⚠ SSH port reachable (login not verified) — key authentication failed. Port is open but the private key did not match.");
+                    else if (auth == SshAuthResult.HostKeyUntrusted)
+                        AppendLog($"⚠ Host key untrusted — SSH authentication skipped until you approve the host key for this instance OCID. Instance preserved. (Not an auth failure.)");
+                    else if (auth == SshAuthResult.HostKeyChanged)
+                        AppendLog($"⚠ Host key CHANGED — logged-in verification blocked until you review and approve the replacement key. Instance preserved; never silently accepted.");
+                    else if (auth == SshAuthResult.NoKey || auth == SshAuthResult.NotAttempted)
+                        AppendLog($"✅ SSH port reachable (TCP 22, login not verified) — try: ssh opc@{_status.PublicIp} (no private key to attempt login)");
+                    else
+                        AppendLog($"✅ SSH port reachable (TCP 22, login not verified) — login attempt errored. Try: ssh opc@{_status.PublicIp}");
+                }
+                else if (_status.SshState == SshProbeResult.Pending)
+                    AppendLog("⚠ SSH initialization pending — first-boot config not yet verified. Instance preserved; open Network Diagnostic.");
+                else
+                    AppendLog("⚠ Recovery required: SSH remains inaccessible — instance preserved for diagnosis. Do not auto-terminate. Open Network Diagnostic. To verify firewall after authenticated login, run: sudo firewall-cmd --get-active-zones; sudo firewall-cmd --list-all; sudo firewall-cmd --permanent --query-service=ssh (verify the zone assigned to your interface, not just service definitions).");
             }
 
             _status.State = HuntState.Success;
@@ -925,13 +1022,47 @@ public partial class MainWindow : Window
         return selected;
     }
 
+        private Task<bool> PromptHostKeyApprovalAsync(HostKeyPrompt prompt)
+    {
+        return Dispatcher.InvokeAsync(() =>
+        {
+            const string scanWarning = "⚠ WARNING: ssh-keyscan does not authenticate the server — a man-in-the-middle could supply a different key during discovery. Verify this fingerprint against a trusted out-of-band source (e.g. OCI console / serial output, or a known provisioning log) before approving.";
+            var text = (prompt.IsChange
+                ? $"⚠ SSH host key CHANGED for instance {RedactOcid(prompt.InstanceOcid)} at {prompt.Host}.\n\n{scanWarning}\n\nPrevious fingerprints:\n{string.Join("\n", prompt.PreviousKeys.Select(k => $"  {k.KeyType} {k.Fingerprint}"))}\n\nNew fingerprints:\n{string.Join("\n", prompt.Keys.Select(k => $"  {k.KeyType} {k.Fingerprint}"))}\n\nApprove the NEW key only if you verified it out-of-band? Importing it replaces the old trusted key (this instance only). Reject if you did not expect a change."
+                : $"New SSH host key for instance {RedactOcid(prompt.InstanceOcid)} at {prompt.Host}.\n\n{scanWarning}\n\nFingerprint(s):\n{string.Join("\n", prompt.Keys.Select(k => $"  {k.KeyType} {k.Fingerprint}"))}\n\nTrust this server? Verify the fingerprint against a trusted source first. Once approved it is saved by OCID (valid known_hosts syntax) and verified strictly on later connections.");
+            return MessageBox.Show(this, text, prompt.IsChange ? "SSH host key changed" : "Trust SSH host key?", MessageBoxButton.YesNo, prompt.IsChange ? MessageBoxImage.Exclamation : MessageBoxImage.Question) == MessageBoxResult.Yes;
+        }).Task;
+    }
+    private static string RedactOcid(string ocid) => ocid.Length <= 18 ? ocid : ocid[..12] + "…" + ocid[^6..];
+
+    private string ProvisionSummary()
+    {
+        if (_status.ProvisionLogKind == null || _status.ProvisionSteps.Count == 0) return string.Empty;
+        static string Short(ProvisionStepOutcome s) => s switch { ProvisionStepOutcome.Success => "OK", ProvisionStepOutcome.Failed => "FAILED", _ => "?" };
+        return _status.ProvisionLogKind switch
+        {
+            ProvisionLogKind.Retrieved => $" | Provision [{Short(_status.ProvisionSteps["sshd"])} sshd / {Short(_status.ProvisionSteps["firewalld"])} firewalld / {Short(ProvisionLogParser.CollapseSshFirewallRule(_status.ProvisionSteps))} ssh-rule]",
+            ProvisionLogKind.NotApplicable => " | Provision: N/A (cloud-init off)",
+            ProvisionLogKind.Missing => " | Provision log missing",
+            _ => " | Provision log error"
+        };
+    }
+
     private void ShowSuccessPanel()
     {
         if (!Dispatcher.CheckAccess()) { Dispatcher.Invoke(ShowSuccessPanel); return; }
 
         var ip = _status.PublicIp;
+        var sshLine = _status.SshState switch
+        {
+            SshProbeResult.LoginVerified => $"✅ SSH login verified — ssh opc@{ip}" + ProvisionSummary(),
+            SshProbeResult.Reachable => $"SSH port reachable (login not verified) — try: ssh opc@{ip}",
+            SshProbeResult.Pending => "SSH initialization pending — instance preserved. Open Network Diagnostic.",
+            SshProbeResult.Unreachable => "Recovery required: SSH remains inaccessible — instance preserved. Do not auto-terminate. Open Network Diagnostic.",
+            _ => ip != null ? $"Connect with:  ssh opc@{ip}" : "No public IP was assigned."
+        };
         TxtSuccess.Text =
-            $"🎉 Instance is RUNNING!  {(ip != null ? $"Connect with:  ssh opc@{ip}" : "No public IP was assigned.")}\n" +
+            $"🎉 Instance is RUNNING!  {sshLine}\n" +
             $"OCID: {_status.SuccessInstanceId}";
         BtnCopySsh.IsEnabled = ip != null;
         BtnCopyIp.IsEnabled = ip != null;
@@ -962,28 +1093,29 @@ public partial class MainWindow : Window
         Activate();
     }
 
-    private async Task<bool> WaitForRunningAsync(OciService oci, string instanceId, CancellationToken ct)
+    private async Task<TimeSpan?> WaitForRunningAsync(OciService oci, string instanceId, CancellationToken ct)
     {
+        var started = DateTime.UtcNow;
         var deadline = DateTime.UtcNow.AddMinutes(15);
         while (DateTime.UtcNow < deadline && !ct.IsCancellationRequested)
         {
             try
             {
                 var inst = await oci.GetInstanceAsync(instanceId, ct);
-                if (inst == null) return false;
+                if (inst == null) return null;
 
                 var state = inst.LifecycleState.ToString();
                 if (state == "Running")
                 {
                     if (_config.AssignPublicIp)
                         _status.PublicIp = await oci.GetPublicIpAsync(_config.CompartmentOcid, instanceId, ct);
-                    return true;
+                    return DateTime.UtcNow - started;
                 }
 
                 if (state == "Terminated" || state == "Failed")
                 {
                     AppendLog($"Instance ended in state {state}");
-                    return false;
+                    return null;
                 }
 
                 AppendLog($"Provisioning... ({state})");
@@ -997,7 +1129,7 @@ public partial class MainWindow : Window
             await Task.Delay(10000, ct);
         }
         AppendLog("Timed out waiting for RUNNING state.");
-        return false;
+        return null;
     }
 
     private void OnWindowClosing(System.ComponentModel.CancelEventArgs e)

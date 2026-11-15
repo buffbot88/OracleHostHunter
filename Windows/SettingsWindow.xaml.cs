@@ -20,6 +20,7 @@ public partial class SettingsWindow : Window
     private bool _ready;
     private bool _updatingMemoryChoices;
     private bool _updatingInstanceChoices;
+    private int? _memoryBeforeMicro;
     private int _instanceCountMaximum = -1;
     private OciService.TenancyUsageSnapshot? _tenancyUsage;
     private DateTime? _tenancyScannedAt;
@@ -43,9 +44,17 @@ public partial class SettingsWindow : Window
         var ocpus = _config.Ocpus ?? 2;
         ComboOcpus.SelectedIndex = Math.Clamp(ocpus, 1, 2) - 1;
 
-        var memory = _config.MemoryInGbs ?? ocpus * 6;
-        ReloadMemoryChoices(ocpus);
-        ComboMemory.SelectedItem = Math.Clamp(memory, 1, AppConfig.AlwaysFreeA1MemoryGb);
+        if (_config.IsFlexibleShape)
+        {
+            var memory = _config.MemoryInGbs ?? ocpus * 6;
+            ReloadMemoryChoices(ocpus);
+            ComboMemory.SelectedItem = Math.Clamp(memory, 1, AppConfig.AlwaysFreeA1MemoryGb);
+        }
+        else
+        {
+            _memoryBeforeMicro = _config.MemoryInGbs;
+            ShowMicroMemoryChoices();
+        }
 
         SliderBoot.Value = Math.Clamp(_config.BootVolumeSizeGb ?? AppConfig.AlwaysFreeBootVolumeSizeGb,
             AppConfig.AlwaysFreeBootVolumeSizeGb, AppConfig.AlwaysFreeBlockStorageGb);
@@ -55,6 +64,9 @@ public partial class SettingsWindow : Window
             : (_config.DisplayName ?? "free-tier-instance");
         TxtMinRetry.Text = _config.MinIntervalSeconds.ToString();
         TxtMaxRetry.Text = _config.MaxIntervalSeconds.ToString();
+        ChkEnableCloudInit.IsChecked = _config.EnableCloudInit;
+        ChkEnableSshHealthCheck.IsChecked = _config.EnableSshHealthCheck;
+        TxtSshPrivateKeyPath.Text = _config.SshPrivateKeyPath ?? string.Empty;
 
         _ready = true;
         UpdateShapeControls();
@@ -63,6 +75,47 @@ public partial class SettingsWindow : Window
         if (TxtBoot != null) TxtBoot.Text = $"{(int)SliderBoot.Value} GB";
         UpdateBudgetText();
         UpdateSafetyText();
+        UpdateSshPairStatus();
+    }
+
+    private void TxtSshPrivateKeyPath_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_ready) return;
+        UpdateSshPairStatus();
+    }
+
+    private void UpdateSshPairStatus()
+    {
+        if (TxtSshPairStatus == null) return;
+        var publicName = DiagnosticLog.SafeFileName(_config.SshPublicKeyPath);
+        var privateOverride = _ready && TxtSshPrivateKeyPath != null && !string.IsNullOrWhiteSpace(TxtSshPrivateKeyPath.Text)
+            ? TxtSshPrivateKeyPath.Text.Trim()
+            : null;
+        try
+        {
+            var verified = CryptoHelper.ValidateSshKeyPair(
+                _config.SshPublicKeyPath,
+                CryptoHelper.DerivePrivateKeyPath(_config.SshPublicKeyPath, privateOverride ?? _config.SshPrivateKeyPath));
+            if (verified)
+            {
+                TxtSshPairStatus.Text =
+                    $"✅ SSH key pair verified: {publicName} matches the private key. SSH login should work once the instance is running.";
+                TxtSshPairStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimary");
+            }
+            else
+            {
+                var privateName = DiagnosticLog.SafeFileName(
+                    CryptoHelper.DerivePrivateKeyPath(_config.SshPublicKeyPath, privateOverride ?? _config.SshPrivateKeyPath));
+                TxtSshPairStatus.Text =
+                    $"⚠ SSH pairing NOT verified: no private key found ({privateName}). The public key format is valid, but SSH login cannot be proven and will likely fail. Launch will proceed with format-only validation.";
+                TxtSshPairStatus.SetResourceReference(TextBlock.ForegroundProperty, "WarningBrush");
+            }
+        }
+        catch (Exception ex)
+        {
+            TxtSshPairStatus.Text = $"❌ SSH key pair invalid: {DiagnosticLog.Redact(ex.Message)}";
+            TxtSshPairStatus.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
+        }
     }
 
     private int DesiredInstanceCount => ComboInstanceCount.SelectedValue is int count ? count : 1;
@@ -131,12 +184,46 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private void ShowMicroMemoryChoices()
+    {
+        _updatingMemoryChoices = true;
+        try
+        {
+            ComboMemory.Items.Clear();
+            ComboMemory.Items.Add(AppConfig.AlwaysFreeMicroMemoryGb);
+            ComboMemory.SelectedItem = AppConfig.AlwaysFreeMicroMemoryGb;
+        }
+        finally
+        {
+            _updatingMemoryChoices = false;
+        }
+    }
+
     private void UpdateShapeControls()
     {
         if (!_ready) return;
         var flexible = ItemA1.IsSelected;
-        PanelOcpus.IsEnabled = flexible;
-        PanelMemory.IsEnabled = flexible;
+        // Keep the panel enabled so the fixed Micro sizing text stays fully
+        // visible; hiding the combos (not greying them) is what makes the
+        // sizing non-editable for Micro.
+        PanelOcpus.IsEnabled = true;
+        PanelMemory.IsEnabled = true;
+        ComboOcpus.Visibility = flexible ? Visibility.Visible : Visibility.Collapsed;
+        ComboMemory.Visibility = flexible ? Visibility.Visible : Visibility.Collapsed;
+        TxtMicroOcpuFixed.Visibility = flexible ? Visibility.Collapsed : Visibility.Visible;
+        TxtMicroMemoryFixed.Visibility = flexible ? Visibility.Collapsed : Visibility.Visible;
+        if (flexible)
+        {
+            var preferred = _memoryBeforeMicro;
+            _memoryBeforeMicro = null;
+            ReloadMemoryChoices(SelectedOcpusPerServer, preferred);
+        }
+        else
+        {
+            if (_memoryBeforeMicro == null)
+                _memoryBeforeMicro = ComboMemory.SelectedItem as int?;
+            ShowMicroMemoryChoices();
+        }
         UpdateAllowedOcpus();
         TxtInstancePoolNote.Text = flexible
             ? "A1 total allowance: 2 OCPU / 12 GB. Per-server OCPU, memory, and boot-volume choices determine whether one or two fit."
@@ -285,7 +372,7 @@ public partial class SettingsWindow : Window
                           $"{AppConfig.AlwaysFreeMaxBootVolumePoolGb} GB block storage. Max for these choices: {maxForPlan}.{tenancySuffix}";
     }
 
-    private void ReloadMemoryChoices(int ocpus)
+    private void ReloadMemoryChoices(int ocpus, int? preferredMemoryGb = null)
     {
         var instanceCount = Math.Max(1, DesiredInstanceCount);
         var max = Math.Min(ocpus * 6, AppConfig.AlwaysFreeA1MemoryGb / instanceCount);
@@ -296,7 +383,7 @@ public partial class SettingsWindow : Window
             ComboMemory.Items.Clear();
             for (var gb = ocpus; gb <= max; gb++)
                 ComboMemory.Items.Add(gb);
-            var previousMemory = previous is int value ? value : ocpus;
+            var previousMemory = preferredMemoryGb ?? (previous is int value ? value : ocpus);
             ComboMemory.SelectedItem = Math.Clamp(previousMemory, ocpus, max);
         }
         finally
@@ -429,6 +516,10 @@ public partial class SettingsWindow : Window
         result.MinIntervalSeconds = minRetry;
         result.MaxIntervalSeconds = maxRetry;
         result.AssignPublicIp = true;
+        result.EnableCloudInit = ChkEnableCloudInit.IsChecked == true;
+        result.EnableSshHealthCheck = ChkEnableSshHealthCheck.IsChecked == true;
+        var privatePath = TxtSshPrivateKeyPath.Text.Trim();
+        result.SshPrivateKeyPath = string.IsNullOrWhiteSpace(privatePath) ? null : privatePath;
         ResultConfig = result;
 
         try

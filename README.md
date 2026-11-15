@@ -258,6 +258,7 @@ you what to fix instead.
 | A1 launch rejected or preflight complains about OCPUs/memory | A1 sizing must stay within 2 OCPU / 12 GB with 1–6 GB per OCPU; adjust in ⚙ Settings |
 | Preflight says the shape is offered in no AD | Your region may not serve that shape; check Limits, Quotas and Usage for the shape's limit name (`standard-e2-micro-core-count` / `standard-a1-core-count`) |
 | Instance created but SSH fails | Check the security list allows TCP 22; wait ~2 min for boot |
+| SSH host key prompt reappeared / "Host key changed" | Trusted host keys are stored per instance OCID in `%LOCALAPPDATA%\OracleHost\known_hosts` and bound to the address they were approved on. An instance whose public IP changed after stop/start must be re-approved. This is a deliberate fail-closed behaviour; strict checking is never weakened. |
 | Build error `NU1101: Unable to find package` | Ensure you have .NET 8+ SDK installed (`dotnet --version`) |
 | OracleHost ignores my `AccountInfo` folder | Check the folder rules above: one private PEM, four required OCIDs |
 

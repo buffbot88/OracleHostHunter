@@ -1,4 +1,5 @@
 using System.IO;
+using OracleHost.Helpers;
 namespace OracleHost.Models;
 
 /// <summary>
@@ -15,6 +16,7 @@ public class AppConfig
     public const string A1FlexShape = "VM.Standard.A1.Flex";
     public const string A1FlexLimitName = "standard-a1-core-count";
     public const int AlwaysFreeMicroInstanceCount = 2;
+    public const int AlwaysFreeMicroMemoryGb = 1;
     public const int AlwaysFreeA1OcpuCount = 2;
     public const int AlwaysFreeA1MemoryGb = 12;
     // Monthly A1 metering for the Always Free allotment.
@@ -48,6 +50,14 @@ public class AppConfig
     public string SubnetOcid { get; set; } = "";
     public string OciConfigPath { get; set; } = "~/.oci/config";
     public string SshPublicKeyPath { get; set; } = "~/.ssh/id_rsa.pub";
+    /// <summary>Optional explicit SSH private-key path; when null the private
+    /// path is derived by stripping a trailing `.pub` from SshPublicKeyPath.</summary>
+    public string? SshPrivateKeyPath { get; set; }
+    /// <summary>Attach Oracle Linux 9 cloud-init user_data (sshd + firewalld ssh)
+    /// at launch. Off by default until proven on a throwaway instance.</summary>
+    public bool EnableCloudInit { get; set; } = false;
+    /// <summary>Probe TCP 22 after the instance reaches RUNNING.</summary>
+    public bool EnableSshHealthCheck { get; set; } = true;
     public string Shape { get; set; } = MicroShape;
     /// <summary>OCPU count for flexible shapes (A1.Flex). Ignored by fixed shapes.</summary>
     public int? Ocpus { get; set; }
@@ -71,6 +81,14 @@ public class AppConfig
     /// </summary>
     public string DisplayNameBase { get; set; } = "free-tier-instance";
     public bool AssignPublicIp { get; set; } = true;
+    /// <summary>NSG OCIDs attached to the newly created VNIC at launch.
+    /// Empty (default) means no NSG is attached; preflight must then ignore
+    /// unrelated NSGs in the VCN rather than treat them as effective.</summary>
+    public List<string> VnicNsgIds { get; set; } = new();
+    /// <summary>Trimmed, distinct, non-empty configured NSG IDs.</summary>
+    public IReadOnlyList<string> ConfiguredNsgIds => (VnicNsgIds ?? new List<string>())
+        .Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim())
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     public int? BootVolumeSizeGb { get; set; }
     public string AvailabilityDomains { get; set; } = "all";
     public int MinIntervalSeconds { get; set; } = DefaultMinRetrySeconds;
@@ -89,6 +107,11 @@ public class AppConfig
     /// <summary>True when the selected shape accepts an OCPU/memory shape config.</summary>
     public bool IsFlexibleShape =>
         string.Equals(Shape, A1FlexShape, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when the configured image is Oracle Linux (gates cloud-init user_data).</summary>
+    public bool IsOracleLinuxImage =>
+        !string.IsNullOrWhiteSpace(ImageOs) &&
+        ImageOs.Contains("Oracle Linux", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The Always Free limit name that applies to the selected shape.</summary>
     public string ActiveLimitName =>
@@ -209,6 +232,23 @@ public class AppConfig
         var expandedKeyPath = Environment.ExpandEnvironmentVariables(SshPublicKeyPath);
         if (!File.Exists(expandedKeyPath))
             problems.Add($"SSH public key not found at {expandedKeyPath}. Generate with: ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa");
+        else
+        {
+            try
+            {
+                CryptoHelper.ValidateSshKeyPair(
+                    SshPublicKeyPath,
+                    CryptoHelper.DerivePrivateKeyPath(SshPublicKeyPath, SshPrivateKeyPath));
+            }
+            catch (InvalidOperationException ex)
+            {
+                problems.Add(ex.Message);
+            }
+            catch (FileNotFoundException ex)
+            {
+                problems.Add(ex.Message);
+            }
+        }
 
         if (MinIntervalSeconds < 10 || MinIntervalSeconds > 600)
             problems.Add($"Minimum retry interval ({MinIntervalSeconds}s) is out of valid range (10-600).");

@@ -71,11 +71,19 @@
                                     <ComboBoxItem Content="1 OCPU"/>
                                     <ComboBoxItem Content="2 OCPUs"/>
                                 </ComboBox>
+                                <TextBlock x:Name="TxtMicroOcpuFixed" Visibility="Collapsed" FontSize="13.5"
+                                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"
+                                           TextWrapping="Wrap" Margin="0,2,0,0"
+                                           Text="Fixed: 1/8 OCPU (burstable to 1 OCPU)"/>
                             </StackPanel>
                             <StackPanel x:Name="PanelMemory" Grid.Column="2">
                                 <TextBlock Style="{StaticResource FieldLabel}" Text="Memory per server"/>
                                 <ComboBox x:Name="ComboMemory" Style="{StaticResource FieldCombo}"
                                           SelectionChanged="ComboMemory_SelectionChanged"/>
+                                <TextBlock x:Name="TxtMicroMemoryFixed" Visibility="Collapsed" FontSize="13.5"
+                                           FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"
+                                           TextWrapping="Wrap" Margin="0,2,0,0"
+                                           Text="Fixed: 1 GB RAM"/>
                             </StackPanel>
                         </Grid>
                         <TextBlock FontSize="12" Foreground="{StaticResource TextMuted}"
@@ -138,6 +146,29 @@
                     </StackPanel>
                 </Border>
 
+                <!-- 5 · SSH -->
+                <Border Style="{StaticResource SectionCard}">
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="5 · SSH"/>
+                        <TextBlock FontSize="12.5" Foreground="{StaticResource TextMuted}"
+                                   TextWrapping="Wrap" Margin="0,0,0,10"
+                                   Text="Public key comes from your AccountInfo ~/.ssh/*.pub. Set the private key to prove the pair matches."/>
+                        <TextBlock Style="{StaticResource FieldLabel}" Text="SSH private key path (optional)"/>
+                        <TextBox x:Name="TxtSshPrivateKeyPath" Style="{StaticResource FieldBox}"
+                                 TextChanged="TxtSshPrivateKeyPath_TextChanged"/>
+                        <TextBlock FontSize="12" Foreground="{StaticResource TextMuted}"
+                                   TextWrapping="Wrap" Margin="0,6,0,12"
+                                   Text="Leave blank to auto-derive (strip .pub). Verified pairing requires this file."/>
+                        <CheckBox x:Name="ChkEnableCloudInit" Margin="0,0,0,8" Foreground="{StaticResource TextPrimary}"
+                                  Content="Enable Oracle Linux cloud-init (sshd + firewalld SSH)"/>
+                        <CheckBox x:Name="ChkEnableSshHealthCheck" Foreground="{StaticResource TextPrimary}"
+                                  Content="Check TCP 22 after instance reaches RUNNING"/>
+                        <TextBlock FontSize="12" Foreground="{StaticResource TextMuted}"
+                                   TextWrapping="Wrap" Margin="0,6,0,0"
+                                   Text="Cloud-init is OFF by default until tested on a throwaway instance. Health check is ON by default; it only reports — it never terminates the instance."/>
+                    </StackPanel>
+                </Border>
+
                 <Border CornerRadius="12" Background="#0E2A1D" BorderBrush="#2A6B45"
                         BorderThickness="1" Padding="14,12" Margin="0,0,0,12">
                     <TextBlock x:Name="TxtBudget" TextWrapping="Wrap" FontSize="13"
@@ -148,6 +179,12 @@
                         BorderThickness="1" Padding="14,12" Margin="0,0,0,4">
                     <TextBlock x:Name="TxtSafety" TextWrapping="Wrap" FontSize="13"
                                Foreground="#9CC8E8"/>
+                </Border>
+
+                <Border CornerRadius="12" Background="#2A1D0E" BorderBrush="#6B4A1F"
+                        BorderThickness="1" Padding="14,12" Margin="0,0,0,4">
+                    <TextBlock x:Name="TxtSshPairStatus" TextWrapping="Wrap" FontSize="13"
+                               Foreground="#F2C57C"/>
                 </Border>
 
                 <TextBlock x:Name="TxtStatus" FontSize="13" TextWrapping="Wrap" Margin="0,10,0,6"

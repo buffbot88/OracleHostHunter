@@ -15,6 +15,12 @@ public class HuntStatus
     public DateTime StartTime { get; set; }
     public double NextRetryIn { get; set; }
     public string? ImageName { get; set; }
+    /// <summary>TCP 22 probe result after RUNNING (null = not probed / no public IP).</summary>
+    public OracleHost.Helpers.SshProbeResult? SshState { get; set; }
+    /// <summary>Provision log verdict (null = not attempted).</summary>
+    public OracleHost.Helpers.ProvisionLogKind? ProvisionLogKind { get; set; }
+    /// <summary>Per-step outcomes: sshd, firewalld, firewall_add, firewall_query, firewall_reload.</summary>
+    public IReadOnlyDictionary<string, OracleHost.Helpers.ProvisionStepOutcome> ProvisionSteps { get; set; } = new Dictionary<string, OracleHost.Helpers.ProvisionStepOutcome>();
 
     public TimeSpan Elapsed =>
         StartTime == default || State == HuntState.Idle
@@ -38,6 +44,9 @@ public class HuntStatus
         LastError = null;
         SuccessInstanceId = null;
         PublicIp = null;
+        SshState = null;
+        ProvisionLogKind = null;
+        ProvisionSteps = new Dictionary<string, OracleHost.Helpers.ProvisionStepOutcome>();
         StartTime = DateTime.UtcNow;
         NextRetryIn = 0;
     }

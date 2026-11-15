@@ -12,6 +12,7 @@ using OracleHost.Helpers;
 using OracleHost.Models;
 using Image = Oci.CoreService.Models.Image;
 using System.IO;
+using System.Text;
 
 namespace OracleHost.Services;
 
@@ -31,6 +32,12 @@ public class OciService : IDisposable
     public sealed record NetworkDiagnosticReport(
         string InstanceId,
         IReadOnlyList<NetworkDiagnosticCheck> Checks)
+    {
+        public bool HasFailures => Checks.Any(check => check.State == "ISSUE");
+    }
+
+    public sealed record SshReadinessCheck(string Title, string State, string Detail);
+    public sealed record SshReadinessReport(IReadOnlyList<SshReadinessCheck> Checks)
     {
         public bool HasFailures => Checks.Any(check => check.State == "ISSUE");
     }
@@ -311,7 +318,23 @@ public class OciService : IDisposable
     {
         EnsureConfigured();
         ValidateAlwaysFreeLaunch(config);
+        CryptoHelper.ValidateSshKeyPair(
+            config.SshPublicKeyPath,
+            CryptoHelper.DerivePrivateKeyPath(config.SshPublicKeyPath, config.SshPrivateKeyPath));
         var sshKey = CryptoHelper.ReadSshPublicKey(config.SshPublicKeyPath);
+
+        var metadata = new Dictionary<string, string> { { "ssh_authorized_keys", sshKey } };
+        if (config.EnableCloudInit && config.IsOracleLinuxImage)
+        {
+            // Tolerant but VISIBLE: `;` keeps first-boot going even if one step
+            // fails, while each exit code is recorded to
+            // /var/log/oraclehost-provision.log so an authenticated SSH check
+            // can report whether initialization actually succeeded. Unlike the
+            // prior `|| true` lines, a failure here is not silently swallowed.
+            const string cloudInit = "#cloud-config\nruncmd:\n  - systemctl enable --now sshd; echo \"sshd:$?\" >> /var/log/oraclehost-provision.log\n  - systemctl enable --now firewalld; echo \"firewalld:$?\" >> /var/log/oraclehost-provision.log\n  - firewall-cmd --permanent --add-service=ssh; echo \"firewall_add:$?\" >> /var/log/oraclehost-provision.log\n  - firewall-cmd --permanent --query-service=ssh; echo \"firewall_query:$?\" >> /var/log/oraclehost-provision.log\n  - firewall-cmd --reload; echo \"firewall_reload:$?\" >> /var/log/oraclehost-provision.log\n";
+            metadata["user_data"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(cloudInit));
+            DiagnosticLog.Info("Provisioning", "cloud-init user_data attached (Oracle Linux).");
+        }
 
         var sourceDetails = new InstanceSourceViaImageDetails
         {
@@ -334,9 +357,12 @@ public class OciService : IDisposable
             // subnet; OracleHost never creates or requests a reserved IP.
             CreateVnicDetails = new CreateVnicDetails
             {
-                AssignPublicIp = config.AssignPublicIp
+                AssignPublicIp = config.AssignPublicIp,
+                NsgIds = config.ConfiguredNsgIds.Count > 0
+                    ? config.ConfiguredNsgIds.ToList()
+                    : null
             },
-            Metadata = new Dictionary<string, string> { { "ssh_authorized_keys", sshKey } }
+            Metadata = metadata
         };
 
         // Fixed shapes (the E2 micro) must NOT receive a ShapeConfig — their
@@ -398,6 +424,151 @@ public class OciService : IDisposable
             DiagnosticLog.Exception("OCI", $"Read instance {instanceId}", ex);
             return null;
         }
+    }
+
+    /// <summary>Read-only SSH readiness check before any launch. Verifies the
+    /// public key, private-key pairing, selected image, cloud-init setting,
+    /// and the target subnet's SSH ingress / route. Never launches or mutates.</summary>
+    public async Task<SshReadinessReport> DiagnoseSshReadinessAsync(AppConfig config, CancellationToken ct = default)
+    {
+        EnsureConfigured();
+        var checks = new List<SshReadinessCheck>();
+        void Add(string title, bool passed, string detail, bool warning = false)
+            => checks.Add(new SshReadinessCheck(title, passed ? "OK" : (warning ? "WARNING" : "ISSUE"), detail));
+
+        // 1. Public-key format
+        try
+        {
+            var key = CryptoHelper.ReadSshPublicKey(config.SshPublicKeyPath);
+            Add("SSH public key", true, $"Valid OpenSSH key at {DiagnosticLog.SafeFileName(config.SshPublicKeyPath)}.");
+            _ = key;
+        }
+        catch (Exception ex)
+        {
+            return new SshReadinessReport(new List<SshReadinessCheck>
+            {
+                new("SSH public key", "ISSUE", DiagnosticLog.Redact(ex.Message))
+            });
+        }
+
+        // 2. Pairing: verified vs format-only (unverified)
+        var privatePath = CryptoHelper.DerivePrivateKeyPath(config.SshPublicKeyPath, config.SshPrivateKeyPath);
+        if (!File.Exists(Environment.ExpandEnvironmentVariables(privatePath)))
+            checks.Add(new SshReadinessCheck("SSH pairing", "WARNING",
+                $"No private key at {DiagnosticLog.SafeFileName(privatePath)}: login cannot be verified. Launch will proceed format-only unless a matching private key is provided."));
+        else
+        {
+            try
+            {
+                var verified = CryptoHelper.ValidateSshKeyPair(config.SshPublicKeyPath, privatePath);
+                checks.Add(verified
+                    ? new SshReadinessCheck("SSH pairing", "OK", $"Public key matches private key {DiagnosticLog.SafeFileName(privatePath)}.")
+                    : new SshReadinessCheck("SSH pairing", "WARNING", "Private key exists but pairing is unverified."));
+            }
+            catch (Exception ex)
+            {
+                checks.Add(new SshReadinessCheck("SSH pairing", "ISSUE", DiagnosticLog.Redact(ex.Message)));
+            }
+        }
+
+        // 3. Image + cloud-init applicability (future launches only)
+        if (config.IsOracleLinuxImage)
+            checks.Add(new SshReadinessCheck("Image / cloud-init", "INFO",
+                config.EnableCloudInit
+                    ? "Oracle Linux image + cloud-init ON: future launches attach failure-logging user_data (sshd/firewalld steps record exit codes, not silently swallowed)."
+                    : "Oracle Linux image + cloud-init OFF (default): future launches rely on image defaults; no user_data."));
+        else
+            checks.Add(new SshReadinessCheck("Image / cloud-init", "WARNING",
+                $"Image OS '{config.ImageOs}' is not Oracle Linux: cloud-init user_data is not attached (Oracle-Linux only)."));
+
+        // 4. Post-RUNNING probe
+        checks.Add(new SshReadinessCheck("SSH health check", "INFO",
+            config.EnableSshHealthCheck
+                ? "After RUNNING the hunter probes TCP 22 then attempts authenticated SSH login (BatchMode)."
+                : "Health check OFF: only TCP 22 probe will run, if enabled at all."));
+
+        // 5. OCI networking: security list OR attached-NSG SSH ingress.
+        // Pre-launch there is no VNIC yet; only NSGs the launch config will
+        // attach (VnicNsgIds) are effective. Unrelated VCN NSGs are ignored.
+        // Post-launch, DiagnoseInstanceNetworkAsync checks actual VNIC NSGs.
+        try
+        {
+            if (string.IsNullOrWhiteSpace(config.SubnetOcid))
+                checks.Add(new SshReadinessCheck("OCI networking", "ISSUE", "Subnet OCID is missing."));
+            else
+            {
+                var subnetResp = await _network!.GetSubnet(
+                    new GetSubnetRequest { SubnetId = config.SubnetOcid }, cancellationToken: ct);
+                var subnet = subnetResp.Subnet;
+                if (subnet.ProhibitPublicIpOnVnic == true)
+                    checks.Add(new SshReadinessCheck("Public IP", "WARNING",
+                        "Subnet prohibits public IPs on VNICs (distinct from ingress: even an Allowed ingress cannot deliver internet SSH without a public IP)."));
+                var slAllowed = false;
+                bool slComplete = true;
+                string? slError = null;
+                try
+                {
+                    foreach (var slId in subnet.SecurityListIds ?? new List<string>())
+                    {
+                        var slResp = await _network.GetSecurityList(
+                            new GetSecurityListRequest { SecurityListId = slId }, cancellationToken: ct);
+                        foreach (var rule in slResp.SecurityList.IngressSecurityRules ?? new List<IngressSecurityRule>())
+                        {
+                            if (!IsSshRule(rule.Protocol, rule.TcpOptions) || !IsInternetCidr(rule.Source, rule.SourceType?.ToString())) continue;
+                            slAllowed = true;
+                        }
+                    }
+                }
+                catch (Exception ex) { slComplete = false; slError = DiagnosticLog.Redact(ex.Message); DiagnosticLog.Exception("SSH Readiness", "Security list check", ex); }
+                // Only NSGs the launch actually attaches (config.VnicNsgIds)
+                // count toward Allowed; unrelated VCN NSGs are ignored.
+                var attachedNsgIds = config.ConfiguredNsgIds;
+                var nsgAllowed = false;
+                bool nsgComplete = true;
+                string? nsgError = null;
+                var nsgCount = attachedNsgIds.Count;
+                try
+                {
+                    foreach (var nsgId in attachedNsgIds)
+                    {
+                        string? page = null;
+                        do
+                        {
+                            var rulesResp = await _network.ListNetworkSecurityGroupSecurityRules(
+                                new ListNetworkSecurityGroupSecurityRulesRequest { NetworkSecurityGroupId = nsgId, Direction = ListNetworkSecurityGroupSecurityRulesRequest.DirectionEnum.Ingress, Page = page }, cancellationToken: ct);
+                            foreach (var rule in rulesResp.Items)
+                            {
+                                if (rule.IsValid == false) continue;
+                                if (IsSshRule(rule.Protocol, rule.TcpOptions) && IsInternetCidr(rule.Source, rule.SourceType?.ToString())) nsgAllowed = true;
+                            }
+                            page = rulesResp.OpcNextPage;
+                        } while (!string.IsNullOrEmpty(page));
+                    }
+                }
+                catch (Exception ex) { nsgComplete = false; nsgError = DiagnosticLog.Redact(ex.Message); DiagnosticLog.Exception("SSH Readiness", "Attached NSG ingress check", ex); }
+                var verdict = ClassifyIngress(slAllowed, nsgAllowed, slComplete, nsgComplete);
+                if (verdict == "Allowed")
+                    checks.Add(new SshReadinessCheck("OCI SSH ingress", "OK",
+                        (slAllowed && nsgAllowed ? $"TCP 22 Allowed: security list + attached NSG ({nsgCount} attached)."
+                        : slAllowed ? "TCP 22 Allowed: subnet security list permits port 22. (Note: allow rule alone does not prove end-to-end SSH — route, OS firewall and sshd still apply.)"
+                        : $"TCP 22 Allowed via attached NSG: {nsgCount} attached NSG(s) inspected; an attached NSG permits port 22.")));
+                else if (verdict == "Blocked")
+                    checks.Add(new SshReadinessCheck("OCI SSH ingress", "ISSUE",
+                        nsgCount == 0
+                            ? "TCP 22 Blocked: security lists were fully inspected and no NSG is configured for attachment, and none permits TCP 22. (Unrelated VCN NSGs were ignored.) Add a stateful ingress rule for your public IP (/32) to a security list or list an NSG in VnicNsgIds."
+                            : $"TCP 22 Blocked: security lists and {nsgCount} attached NSG(s) were fully inspected and none permits TCP 22. Add a stateful ingress rule for your public IP (/32) to a security list or an attached NSG."));
+                else
+                    checks.Add(new SshReadinessCheck("OCI SSH ingress", "WARNING",
+                        $"TCP 22 Unknown: incomplete information ({(slComplete ? "" : "security-list ")}{(nsgComplete ? "" : "attached-NSG ")}check failed{(slError ?? nsgError)}). Not reporting Blocked without full inspection of attached networking."));
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Exception("SSH Readiness", "Subnet SSH ingress check", ex);
+            checks.Add(new SshReadinessCheck("OCI networking", "WARNING", $"Could not verify ingress: {DiagnosticLog.Redact(ex.Message)}"));
+        }
+
+        return new SshReadinessReport(checks);
     }
 
     public async Task<NetworkDiagnosticReport> DiagnoseInstanceNetworkAsync(
@@ -623,6 +794,16 @@ public class OciService : IDisposable
         if (protocol != "6") return false;
         var ports = tcpOptions?.DestinationPortRange;
         return ports == null || (ports.Min ?? 0) <= 443 && (ports.Max ?? 65535) >= 443;
+    }
+
+    /// <summary>NSG-aware ingress verdict. Allowed if either source permits
+    /// TCP 22; Blocked only if BOTH were fully inspected; Unknown if either
+    /// inspection was incomplete (never Blocked on an NSG permission gap).</summary>
+    public static string ClassifyIngress(bool securityListAllowed, bool nsgAllowed, bool securityListComplete, bool nsgComplete)
+    {
+        if (securityListAllowed || nsgAllowed) return "Allowed";
+        if (!securityListComplete || !nsgComplete) return "Unknown";
+        return "Blocked";
     }
 
     private static bool IsSshRule(string? protocol, TcpOptions? tcpOptions)

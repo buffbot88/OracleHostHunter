@@ -258,6 +258,9 @@ internal static class Program
         accountInfo.AllowExisting = config.AllowExisting;
         accountInfo.HasSeenOnboarding = config.HasSeenOnboarding;
         accountInfo.SshPublicKeyPath = config.SshPublicKeyPath;
+        accountInfo.SshPrivateKeyPath = config.SshPrivateKeyPath;
+        accountInfo.EnableCloudInit = config.EnableCloudInit;
+        accountInfo.EnableSshHealthCheck = config.EnableSshHealthCheck;
         accountInfo.OciConfigPath = config.OciConfigPath;
         accountInfo.BootVolumeSizeGb = config.BootVolumeSizeGb;
         accountInfo.AvailabilityDomains = config.AvailabilityDomains;
