@@ -7,12 +7,12 @@
 *Finds Oracle Cloud capacity for you, then proves you can actually log in.*
 
 [![Version](https://img.shields.io/badge/version-3.0.0-orange?style=for-the-badge)](CHANGELOG.md)
-[![CI](https://github.com/buffbot88/OracleHostHunter/actions/workflows/ci.yml/badge.svg)](https://github.com/buffbot88/OracleHostHunter/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/buffbot88/OracleHostHunter/ci.yml?branch=main&label=CI&style=for-the-badge)](https://github.com/buffbot88/OracleHostHunter/actions/workflows/ci.yml)
 [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?style=for-the-badge)](https://dotnet.microsoft.com/download/dotnet/8.0)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=for-the-badge)](#1-prerequisites)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=for-the-badge)](LICENSE)
 
-[**Quick start**](#-quick-start) · [**SSH verification**](#-verified-ssh-access) · [**Troubleshooting**](#-troubleshooting) · [**Changelog**](CHANGELOG.md)
+[**Quick start**](#-quick-start) · [**SSH verification**](#-verified-ssh-access) · [**Config**](#config-reference) · [**Troubleshooting**](#-troubleshooting) · [**Changelog**](CHANGELOG.md)
 
 </div>
 
@@ -266,6 +266,8 @@ Helpers/
 ```
 
 ---
+
+<a id="config-reference" name="config-reference"></a>
 
 ## ⚙️ Config reference (`config.json`)
 
