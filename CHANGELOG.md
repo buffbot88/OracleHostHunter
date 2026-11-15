@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.0 (2026-11-15)
+
+### SSH diagnostics
+- **Read-only SSH readiness preflight**: validates public-key format, private-key pairing, the
+  selected image/cloud-init setting, and TCP 22 ingress across the applicable subnet security lists
+  and only the NSGs the launch actually attaches (`VnicNsgIds`). Reports `Allowed`, `Blocked`, or
+  `Unknown` (never `Blocked` when a permission gap prevents full inspection), and keeps public-IP
+  problems separate from ingress problems.
+- **Launch results now distinguish RUNNING from reachable**: after RUNNING the app probes TCP 22 and
+  then attempts an authenticated login. Wording is explicit — "SSH port reachable (login not
+  verified)" is never reported as a verified login.
+- **Persistent host-key trust**: first contact shows the `ssh-keyscan` fingerprints and warns that
+  keyscan does not authenticate the server; approval is required before any login. Keys are stored
+  per instance OCID in `%LOCALAPPDATA%\OracleHost\known_hosts` (valid OpenSSH syntax) and enforced
+  with `StrictHostKeyChecking=yes`. A changed key blocks verification until explicitly reviewed, and
+  an OCID's entries can never overwrite another instance's.
+- **Optional Oracle Linux cloud-init** (`EnableCloudInit`, off by default) records `sshd` and
+  `firewalld` step exit codes to `/var/log/oraclehost-provision.log`; after a verified login the app
+  reads it back read-only and reports each step as Success, Failed, or Unknown. A missing log is
+  reported as Not Applicable/Missing, never as an authentication failure.
+- **Settings** gained a `5 · SSH` section for the private-key path and both toggles.
+- Diagnostics never terminate, retry, or modify an instance.
+
 ## 0.4.0 (2026-10-11)
 
 ### Onboarding & UI
